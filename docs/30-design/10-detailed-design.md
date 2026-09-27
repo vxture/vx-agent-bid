@@ -98,10 +98,10 @@ Compose 项目名是 `tenderforge`（`docker-compose.yml` 顶层 `name:`），�
 | --- | --- |
 | 契约层（X-1 封套、X-2 task_id、X-3 审计字段、A-2/3/4 形状、B-1/3/4 动词） | 已落地 |
 | 租户轴（`TenantScope`，见 §10.0） | 写入已落地；读过滤待 OIDC 切换 |
-| C1 身份（OIDC 授权码 + PKCE，服务端会话，反向登出验签） | **代码已落地**，等平台凭证做活体验证；未配置时走替身，部署态拒绝以替身启动 |
-| C1b S2S 换票（RFC 8693，每次调用现铸） | **代码已落地**，同上 |
-| C2 权益（`GET /platform/entitlements`，45s 缓存不落库） | **代码已落地**，同上；`GET /api/entitlement` 发能力集与两条门控公式；**命令入口强制判定**（`EntitlementGuard`，见 §11） |
-| C3 上行（`POST /usage/consume`，缓冲 + 冲洗，永远 200） | **代码已落地**，同上；见 §10.4 |
+| C1 身份（OIDC 授权码 + PKCE，服务端会话，反向登出验签） | **生产已通**（2026-09-27 实测：平台 `session.refresh_tokens` 里本 client 31 条）；未配置时走替身，部署态拒绝以替身启动 |
+| C1b S2S 换票（RFC 8693，每次调用现铸） | **代码已落地**；生产配置齐全（2026-09-27 实测：`PLATFORM_API_URL`/`ATLAS_API_URL`/OIDC 全在，`ALLOW_MOCK_ON_DEPLOY=false`）；卡在平台换票覆盖门 `invalid_target`（本产品尚无订阅/开通，日志可见），接入认证落下沙箱订阅后即可活体验证 |
+| C2 权益（`GET /platform/entitlements`，45s 缓存不落库） | **代码已落地**；生产配置齐全（2026-09-27 实测：`PLATFORM_API_URL`/`ATLAS_API_URL`/OIDC 全在，`ALLOW_MOCK_ON_DEPLOY=false`）；卡在平台换票覆盖门 `invalid_target`（本产品尚无订阅/开通，日志可见），接入认证落下沙箱订阅后即可活体验证；`GET /api/entitlement` 发能力集与两条门控公式；**命令入口强制判定**（`EntitlementGuard`，见 §11） |
+| C3 上行（`POST /usage/consume`，缓冲 + 冲洗，永远 200） | **代码已落地**；生产配置齐全（2026-09-27 实测：`PLATFORM_API_URL`/`ATLAS_API_URL`/OIDC 全在，`ALLOW_MOCK_ON_DEPLOY=false`）；卡在平台换票覆盖门 `invalid_target`（本产品尚无订阅/开通，日志可见），接入认证落下沙箱订阅后即可活体验证；见 §10.4 |
 | C3 下发（provisioning webhook，HMAC 原始字节验签） | **代码已落地**，等平台配置投递地址与密钥；见 §10.5 |
 | Atlas 唯一模型出口 | **代码已落地**，见 §8.3；未配 `ATLAS_API_URL` 时仍直连，部署态拒绝以直连启动 |
 | 被调方半边（八条验票、`/.well-known/vxture-tools`） | 未接入 |
