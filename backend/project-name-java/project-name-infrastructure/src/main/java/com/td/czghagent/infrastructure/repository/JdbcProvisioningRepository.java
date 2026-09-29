@@ -10,7 +10,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
 /**
  * C3 下发的 JDBC 实现。
@@ -100,15 +99,5 @@ public class JdbcProvisioningRepository implements ProvisioningRepository {
             // 行已存在但 UPDATE 没命中，说明另一个副本刚写入了 seq 不更小的状态。
             // 它赢了，这条就此作废——这正是 last_seq 条件要保护的结果。
         }
-    }
-
-    @Override
-    public List<Delivery> recentDeliveries(int limit) {
-        return jdbcTemplate.query("""
-                SELECT event_type, outcome, received_at FROM platform_provision_delivery
-                ORDER BY received_at DESC LIMIT ?
-                """, (rs, row) -> new Delivery(
-                        rs.getString("event_type"), rs.getString("outcome"),
-                        JdbcTimes.localDateTime(rs, "received_at")), limit);
     }
 }

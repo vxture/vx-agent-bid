@@ -17,7 +17,7 @@ import com.td.czghagent.domain.port.PlatformDiagnostics;
 import com.td.czghagent.domain.port.S2STokenMinter;
 import com.td.czghagent.domain.port.UsageConsumeClient;
 import com.td.czghagent.domain.port.WebhookSignatureVerifier;
-import com.td.czghagent.domain.repository.ProvisioningRepository;
+import com.td.czghagent.domain.repository.ProvisioningDeliveryLog;
 import com.td.czghagent.domain.repository.UsageBufferRepository;
 import com.td.czghagent.infrastructure.integration.AiServiceHttpClient;
 import com.td.czghagent.infrastructure.integration.AtlasCallCredentials;
@@ -70,7 +70,7 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
     private final UsageConsumeClient usageConsumeClient;
     private final WebhookSignatureVerifier webhookVerifier;
     private final UsageBufferRepository usageBuffer;
-    private final ProvisioningRepository provisioning;
+    private final ProvisioningDeliveryLog deliveries;
     private final RestClient client;
     private final String platformApiUrl;
     private final String atlasApiUrl;
@@ -87,13 +87,13 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
             UsageConsumeClient usageConsumeClient,
             WebhookSignatureVerifier webhookVerifier,
             UsageBufferRepository usageBuffer,
-            ProvisioningRepository provisioning,
+            ProvisioningDeliveryLog deliveries,
             RestClient.Builder builder,
             @Value("${app.platform.api-url:}") String platformApiUrl,
             @Value("${app.atlas.api-url:}") String atlasApiUrl
     ) {
         this(oidcProperties, oidcDiscovery, minter, atlasCredentials, aiService, entitlementResolver,
-                usageConsumeClient, webhookVerifier, usageBuffer, provisioning, builder,
+                usageConsumeClient, webhookVerifier, usageBuffer, deliveries, builder,
                 platformApiUrl, atlasApiUrl, Clock.systemUTC());
     }
 
@@ -107,7 +107,7 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
             UsageConsumeClient usageConsumeClient,
             WebhookSignatureVerifier webhookVerifier,
             UsageBufferRepository usageBuffer,
-            ProvisioningRepository provisioning,
+            ProvisioningDeliveryLog deliveries,
             RestClient.Builder builder,
             String platformApiUrl,
             String atlasApiUrl,
@@ -122,7 +122,7 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
         this.usageConsumeClient = usageConsumeClient;
         this.webhookVerifier = webhookVerifier;
         this.usageBuffer = usageBuffer;
-        this.provisioning = provisioning;
+        this.deliveries = deliveries;
         this.client = builder.build();
         this.platformApiUrl = platformApiUrl == null ? "" : platformApiUrl.replaceAll("/+$", "");
         this.atlasApiUrl = atlasApiUrl == null ? "" : atlasApiUrl.trim();
@@ -271,7 +271,7 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
         boolean selfTest = webhookVerifier.selfTest();
         String seen;
         try {
-            List<ProvisioningRepository.Delivery> recent = provisioning.recentDeliveries(5);
+            List<ProvisioningDeliveryLog.Delivery> recent = deliveries.recent(5);
             seen = recent.isEmpty()
                     ? "尚未收到任何投递——请平台线发一次测试投递"
                     : "最近投递：" + recent.stream()

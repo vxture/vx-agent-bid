@@ -15,7 +15,7 @@ import com.td.czghagent.domain.port.EntitlementResolver;
 import com.td.czghagent.domain.port.PlatformDiagnostics;
 import com.td.czghagent.domain.port.S2STokenMinter;
 import com.td.czghagent.domain.port.UsageConsumeClient;
-import com.td.czghagent.domain.repository.ProvisioningRepository;
+import com.td.czghagent.domain.repository.ProvisioningDeliveryLog;
 import com.td.czghagent.domain.repository.UsageBufferRepository;
 import com.td.czghagent.infrastructure.integration.AiServiceHttpClient;
 import com.td.czghagent.infrastructure.integration.AtlasCallCredentials;
@@ -331,30 +331,11 @@ class PlatformDiagnosticsServiceTest {
         }
     }
 
-    private static final class NoDeliveries implements ProvisioningRepository {
+    private static final class NoDeliveries implements ProvisioningDeliveryLog {
         @Override
-        public boolean claimDelivery(String deliveryId, String eventType, String workspaceId,
-                                     long seq, LocalDateTime receivedAt) {
-            return true;
-        }
-
-        @Override
-        public void recordOutcome(String deliveryId, String outcome) {
-        }
-
-        @Override
-        public long lastSeq(String workspaceId, String product) {
-            return 0;
-        }
-
-        @Override
-        public void upsertInstance(String workspaceId, String product, String state,
-                                   long seq, LocalDateTime at) {
-        }
-
-        @Override
-        public List<Delivery> recentDeliveries(int limit) {
+        public List<Delivery> recent(int limit) {
             return List.of();
         }
     }
 }
+

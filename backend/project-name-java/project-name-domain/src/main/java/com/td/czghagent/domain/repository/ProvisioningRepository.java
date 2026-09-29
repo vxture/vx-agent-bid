@@ -4,7 +4,6 @@
 package com.td.czghagent.domain.repository;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
 /**
  * C3 下发的落库口。
@@ -37,15 +36,4 @@ public interface ProvisioningRepository {
      */
     void upsertInstance(String workspaceId, String product, String state,
                         long seq, LocalDateTime at);
-
-    /**
-     * 最近收到的几次投递，新的在前。
-     *
-     * <p>系统验证用它回答「平台到底投递过没有」：验签自检只证明我们认得出平台的签名，
-     * 证明不了平台真的往这里发过东西。
-     */
-    List<Delivery> recentDeliveries(int limit);
-
-    record Delivery(String eventType, String outcome, LocalDateTime receivedAt) {
-    }
 }
