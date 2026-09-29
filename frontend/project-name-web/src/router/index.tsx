@@ -71,6 +71,10 @@ const routes: RouteObject[] = [
         path: 'console/audit-logs',
         lazy: lazyPage(() => import('@/pages/AdminAuditLogs')),
       },
+      {
+        path: 'console/diagnostics',
+        lazy: lazyPage(() => import('@/pages/AdminDiagnostics')),
+      },
       { path: 'admin/*', element: <Navigate to="/console/audit-logs" replace /> },
     ],
   },

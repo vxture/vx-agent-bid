@@ -44,3 +44,33 @@ export interface AuditLogFilters {
   startDate: string
   endDate: string
 }
+
+/**
+ * 系统验证的一项探测（`GET /api/admin/platform-check`）。
+ *
+ * `configured=false` 时 `ok` 恒假：界面显示「未配置」而不是「异常」——
+ * 没接的通道和接坏了的通道是两件事，混成一种红色会让人朝错误的方向查。
+ */
+export interface PlatformProbe {
+  configured: boolean
+  ok: boolean
+  detail: string
+}
+
+export interface PlatformCheck {
+  time: string
+  c1: PlatformProbe
+  tokenMint: PlatformProbe
+  c2: PlatformProbe
+  c3Up: PlatformProbe
+  c3Down: PlatformProbe
+  atlas: PlatformProbe
+  usageReplay: PlatformProbe
+}
+
+/** 会花钱的探测的结果：整体结论 + 逐项明细。 */
+export interface PlatformSpendResult {
+  ok: boolean
+  detail: string
+  items: PlatformProbe[]
+}

@@ -58,6 +58,8 @@ const actionLabels: Record<string, string> = {
   BID_LAYOUT_COMPLETE: '完成排版',
   BID_EXPORT_CREATE: '导出标书',
   ACCOUNT_PROFILE_UPDATE: '更新个人资料',
+  PLATFORM_PROBE_ATLAS: '运行 Atlas 探测',
+  PLATFORM_PROBE_USAGE_REPLAY: '运行用量重放校验',
   ACCOUNT_AVATAR_UPDATE: '更新头像',
   ACCOUNT_PASSWORD_CHANGE: '修改密码',
   USER_CREATE: '新建用户',

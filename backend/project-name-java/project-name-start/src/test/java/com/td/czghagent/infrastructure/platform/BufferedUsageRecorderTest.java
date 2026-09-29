@@ -115,6 +115,11 @@ class BufferedUsageRecorderTest {
             public int purgeFlushedBefore(LocalDateTime before) {
                 return 0;
             }
+
+            @Override
+            public long countUnflushed() {
+                return 0;
+            }
         }, clock);
 
         assertThatCode(() -> failing.record(UsageEvent.of(
@@ -159,6 +164,11 @@ class BufferedUsageRecorderTest {
 
         @Override
         public int purgeFlushedBefore(LocalDateTime before) {
+            return 0;
+        }
+
+        @Override
+        public long countUnflushed() {
             return 0;
         }
     }

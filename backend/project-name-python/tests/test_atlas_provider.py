@@ -443,3 +443,91 @@ def test_survives_an_error_body_that_is_not_json(caller: None) -> None:
         _run(provider)
 
     assert "UNKNOWN" in str(failure.value)
+
+
+# ── 归因字段与系统验证探测 ─────────────────────────────────────────────────
+
+
+def test_every_call_says_which_operation_spent_it(caller: None) -> None:
+    """featureId 是 Atlas 里把一份标书的推理消耗拆到环节上的唯一维度。
+
+    applicationId 刻意不送：Atlas 的授权查询把它按 UUID 转型，
+    送一个 operation 名会让调用以数据库转型错误失败。
+    """
+    provider, seen = _provider(_answers(_completion('{"value":"ok"}')))
+
+    _run(provider, "consistency_review")
+
+    body = json.loads(seen[0].content)
+    assert body["applicationType"] == "agent"
+    assert body["featureId"] == "consistency_review"
+    assert "applicationId" not in body
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        [{"modelCode": "m-1"}, {"modelCode": "m-2"}],
+        {"data": [{"id": "m-1"}, {"code": "m-2"}]},
+        {"models": ["m-1", "m-2"]},
+    ],
+)
+def test_model_list_is_read_with_the_same_ticket(caller: None, answer: Any) -> None:
+    provider, seen = _provider(_answers(answer))
+
+    codes = asyncio.run(provider.list_models())
+
+    assert codes == ["m-1", "m-2"]
+    assert seen[0].method == "GET"
+    assert seen[0].url.path == "/v1/models"
+    assert seen[0].headers["authorization"] == "Bearer minted.jwt.value"
+
+
+def test_model_list_refusal_carries_atlas_code(caller: None) -> None:
+    provider, _ = _provider(_answers({"code": "S2S_TOKEN_INVALID", "message": "bad"}, 401))
+
+    with pytest.raises(AtlasTokenRejectedError):
+        asyncio.run(provider.list_models())
+
+
+def test_probe_is_one_capped_call_on_the_named_route(caller: None) -> None:
+    provider, seen = _provider(_answers(_completion("pong")))
+
+    result = asyncio.run(provider.probe(REASONING_ENDPOINT_CODE))
+
+    body = json.loads(seen[0].content)
+    assert body["endpointCode"] == REASONING_ENDPOINT_CODE
+    assert body["maxTokens"] == 8, "探测要证明的是链路活着，补全上限压到最小"
+    assert body["taskId"] == "task-1"
+    assert body["tenantId"] == TENANT_UUID
+    assert body["featureId"] == "diagnostics.atlas_probe"
+    assert result == {
+        "endpointCode": REASONING_ENDPOINT_CODE,
+        "ok": True,
+        "modelCode": "deepseek-v4-flash",
+        "latencyMs": 900,
+        "totalTokens": 160,
+    }
+
+
+def test_probe_reports_a_refused_route_instead_of_raising(caller: None) -> None:
+    """一条路由未授权不能遮住其余几条：失败写进结果，不抛出。"""
+    provider, _ = _provider(_answers({"code": "NOT_ENTITLED", "message": "no grant"}, 403))
+
+    result = asyncio.run(provider.probe(FAST_ENDPOINT_CODE))
+
+    assert result["ok"] is False
+    assert result["code"] == "AI_ATLAS_NOT_ENTITLED"
+    assert "no grant" in result["message"]
+
+
+def test_probe_without_a_ticket_makes_no_call() -> None:
+    provider, seen = _provider(_answers(_completion("pong")))
+    task = _task_id.set("task-1")
+    try:
+        result = asyncio.run(provider.probe(FAST_ENDPOINT_CODE))
+    finally:
+        _task_id.reset(task)
+
+    assert result["ok"] is False
+    assert seen == []

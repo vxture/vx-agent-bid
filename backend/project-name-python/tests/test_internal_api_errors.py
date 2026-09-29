@@ -34,7 +34,7 @@ from czghagent_ai.services.ai_provider import (
     AiProviderTimeoutError,
     OpenAiCompatibleProvider,
 )
-from czghagent_ai.services.atlas_endpoints import AUTHORIZED_ENDPOINT_CODES
+from czghagent_ai.services.atlas_endpoints import AUTHORIZED_ENDPOINT_CODES, routed_endpoint_codes
 from czghagent_ai.services.atlas_provider import (
     AtlasNotEntitledError,
     AtlasProvider,
@@ -78,7 +78,12 @@ def test_atlas_is_chosen_whenever_it_is_configured(monkeypatch: pytest.MonkeyPat
     assert isinstance(internal.create_ai_provider(), AtlasProvider)
     exit_line = internal.describe_model_exit()
     assert "Atlas http://atlas.local" in exit_line
-    assert all(code in exit_line for code in AUTHORIZED_ENDPOINT_CODES)
+    # 只列真正会调用的路由：授权在手而没有调用点的那几条写进这一行，
+    # 读日志的人会以为本产品在用 embedding / rerank。
+    assert all(code in exit_line for code in routed_endpoint_codes())
+    assert all(
+        code not in exit_line for code in AUTHORIZED_ENDPOINT_CODES - set(routed_endpoint_codes())
+    )
 
 
 @pytest.mark.parametrize("stage", ["dev", "beta", "production"])
@@ -342,3 +347,46 @@ def test_a_rendered_document_carries_its_quality_result_in_headers(
     assert response.headers["X-Actual-Pages"] == header
     assert response.headers["X-QA-Status"] == "FAILED"
     assert base64.urlsafe_b64decode(response.headers["X-QA-Summary-Base64"]).decode("utf-8") == qa.summary
+
+
+# ── 系统验证：Atlas 探测端点 ───────────────────────────────────────────────
+
+
+class _RecordingAtlas(AtlasProvider):
+    def __init__(self) -> None:
+        super().__init__("http://atlas.local")
+        self.probed: list[str] = []
+
+    async def probe(self, endpoint_code: str) -> dict[str, Any]:
+        self.probed.append(endpoint_code)
+        return {"endpointCode": endpoint_code, "ok": True}
+
+
+def test_probe_defaults_to_the_routes_the_product_actually_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    atlas = _RecordingAtlas()
+    monkeypatch.setattr(internal, "model_exit", atlas)
+
+    asyncio.run(internal.probe_atlas(internal.AtlasProbeRequest()))
+
+    assert atlas.probed == list(routed_endpoint_codes())
+
+
+def test_probe_refuses_a_route_outside_the_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """会花钱的端点不能变成「随便挑一个 code 打一次」的通道。"""
+    atlas = _RecordingAtlas()
+    monkeypatch.setattr(internal, "model_exit", atlas)
+
+    with pytest.raises(ServiceError) as caught:
+        asyncio.run(internal.probe_atlas(internal.AtlasProbeRequest(endpointCodes=["chat/fast", "chat/secret"])))
+
+    assert (caught.value.status, caught.value.code) == (422, "AI_ATLAS_ENDPOINT_NOT_AUTHORIZED")
+    assert atlas.probed == []
+
+
+def test_probes_say_plainly_when_the_process_is_not_on_atlas(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(internal, "model_exit", OpenAiCompatibleProvider("k", "http://x", "m", 30, 0))
+
+    with pytest.raises(ServiceError) as caught:
+        asyncio.run(internal.list_atlas_models())
+
+    assert (caught.value.status, caught.value.code) == (503, "AI_ATLAS_NOT_CONFIGURED")

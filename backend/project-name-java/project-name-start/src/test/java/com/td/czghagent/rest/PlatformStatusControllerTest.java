@@ -249,6 +249,11 @@ class PlatformStatusControllerTest {
         public boolean isConfigured() {
             return configured;
         }
+
+        @Override
+        public boolean selfTest() {
+            return configured;
+        }
     }
 
     private record StubConsume(boolean mock) implements UsageConsumeClient {

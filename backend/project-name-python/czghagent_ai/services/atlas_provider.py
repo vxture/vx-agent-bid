@@ -231,6 +231,7 @@ class AtlasProvider:
             # 也是 Atlas 侧的幂等键，以及在它请求日志里定位本次调用的唯一办法，
             # 所以在这里生成而不是交给服务端。
             "requestId": str(uuid.uuid4()),
+            **_attribution(operation),
         }
         if tenant_id:
             # tenantId 取自票里的 claim，<b>不是</b>产品码。送产品码看起来能跑：
@@ -280,6 +281,127 @@ class AtlasProvider:
             decoded, _atlas_diagnostics(body, content, finish_reason, attempts)
         )
 
+
+    # ── 系统验证 ─────────────────────────────────────────────────────────────
+    #
+    # 两个探测走的是与业务调用<b>同一张票、同一个基址、同一套错误翻译</b>，
+    # 不另起一条线路：另起的那条证明的只是它自己能通。
+
+    async def list_models(self) -> list[str]:
+        """带票读 ``GET /v1/models``。不计量，是「票有效」最便宜的证明。
+
+        200 之后的任何失败都是授权或业务问题，不是凭据问题。
+        """
+        self.validate_configuration()
+        token, _ = current_atlas_identity()
+        if not token:
+            raise AiProviderNotConfiguredError(
+                "本次请求没有携带 Atlas S2S 票；票由 Java 侧现铸并转呈", stage="atlas_models"
+            )
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                response = await client.get(
+                    f"{self._base_url}/v1/models",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                )
+        except httpx.HTTPError as exception:
+            raise AiProviderError(
+                "Atlas 不可达", stage="atlas_models", elapsed_millis=_elapsed_millis(started)
+            ) from exception
+        if response.status_code >= 400:
+            raise _atlas_error(response, "atlas_models", 1, started)
+        return _model_codes(response.json())
+
+    async def probe(self, endpoint_code: str) -> dict[str, Any]:
+        """对一条路由发一次最短的真实调用。<b>会花钱</b>，由 Atlas 自行计量上报。
+
+        补全上限压到 8 个 token：要证明的是这条路由授权在、模型挂着、
+        计量链路活着，不是模型会说什么。失败不抛出而是写进结果——
+        逐条探测时一条路由未授权不该遮住其余几条的真相。
+        """
+        self.validate_configuration()
+        task_id = current_task_id()
+        token, tenant_id = current_atlas_identity()
+        if not task_id or not token:
+            return {
+                "endpointCode": endpoint_code,
+                "ok": False,
+                "code": "AI_TASK_ID_MISSING" if not task_id else "AI_PROVIDER_NOT_CONFIGURED",
+                "message": "缺少 task_id" if not task_id else "本次请求没有携带 Atlas S2S 票",
+            }
+        body: dict[str, Any] = {
+            "endpointCode": endpoint_code,
+            "messages": [{"role": "user", "content": "ping"}],
+            "maxTokens": 8,
+            "taskId": task_id,
+            "requestId": str(uuid.uuid4()),
+            **_attribution("diagnostics.atlas_probe"),
+        }
+        if tenant_id:
+            body["tenantId"] = tenant_id
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                response = await client.post(
+                    f"{self._base_url}/v1/chat",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                    json=body,
+                )
+        except httpx.HTTPError as exception:
+            return {
+                "endpointCode": endpoint_code,
+                "ok": False,
+                "code": "AI_GATEWAY_UNAVAILABLE",
+                "message": f"Atlas 不可达：{type(exception).__name__}",
+            }
+        if response.status_code >= 400:
+            error = _atlas_error(response, "atlas_probe", 1, started)
+            return {
+                "endpointCode": endpoint_code,
+                "ok": False,
+                "code": getattr(error, "atlas_code", error.code),
+                "message": str(error),
+            }
+        payload = response.json() if response.content else {}
+        usage = payload.get("usage") if isinstance(payload, dict) else None
+        return {
+            "endpointCode": endpoint_code,
+            "ok": True,
+            "modelCode": payload.get("modelCode") if isinstance(payload, dict) else None,
+            "latencyMs": payload.get("latencyMs") if isinstance(payload, dict) else None,
+            "totalTokens": usage.get("totalTokens") if isinstance(usage, dict) else None,
+        }
+
+
+def _attribution(feature_id: str) -> dict[str, str]:
+    """Atlas 用来拆分消耗的两个字段。
+
+    ``applicationType`` 固定为 ``agent``——本产品是一个智能体实例。
+    ``featureId`` 是 operation 本身：请求体里没有别的维度能说明这一笔推理花在
+    解读、目录、正文还是审查上，而这正是运营对一份标书的成本要问的第一个问题。
+    ``applicationId`` 刻意不送：Atlas 在授权查询里把它按 UUID 转型，
+    送一个非 UUID（例如 operation 名）会让调用以数据库转型错误失败。
+    """
+    return {"applicationType": "agent", "featureId": feature_id}
+
+
+def _model_codes(body: Any) -> list[str]:
+    """``/v1/models`` 的三种已见形状：裸数组、``{data: [...]}``、``{models: [...]}``。"""
+    items: Any = body
+    if isinstance(body, dict):
+        items = body.get("data") or body.get("models") or []
+    if not isinstance(items, list):
+        return []
+    codes: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            codes.append(item)
+        elif isinstance(item, dict):
+            code = item.get("modelCode") or item.get("code") or item.get("id")
+            if isinstance(code, str):
+                codes.append(code)
+    return codes
 
 def _atlas_diagnostics(
     body: dict[str, Any], content: str, finish_reason: str | None, attempts: int

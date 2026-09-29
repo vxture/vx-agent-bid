@@ -101,6 +101,18 @@ public final class HmacWebhookSignatureVerifier implements WebhookSignatureVerif
     }
 
     /** {@code "{t}." + 原始字节}，在字节层面拼接——原始字节一路不解码。 */
+    @Override
+    public boolean selfTest() {
+        if (!isConfigured()) {
+            return false;
+        }
+        long timestamp = clock.instant().getEpochSecond();
+        byte[] body = "{\"probe\":true}".getBytes(StandardCharsets.UTF_8);
+        String header = "t=" + timestamp + ",v1=" + hmacHex(secrets.get(0), payload(timestamp, body));
+        byte[] tampered = "{\"probe\":true} ".getBytes(StandardCharsets.UTF_8);
+        return verify(body, header) && !verify(tampered, header);
+    }
+
     private static byte[] payload(long timestamp, byte[] rawBody) {
         byte[] prefix = (timestamp + ".").getBytes(StandardCharsets.US_ASCII);
         byte[] payload = new byte[prefix.length + rawBody.length];

@@ -23,4 +23,13 @@ public interface WebhookSignatureVerifier {
 
     /** 是否配了任何密钥。未配置时 {@link #verify} 必须恒假。 */
     boolean isConfigured();
+
+    /**
+     * 自检：按平台的签法给一段合成报文签名，走一遍真实的 {@link #verify}，
+     * 再把报文改一个字节——后者必须被拒。
+     *
+     * <p>证明的是解析、时间窗与常量时间比较都在工作，不需要等一次真实投递。
+     * 未配置时恒假。
+     */
+    boolean selfTest();
 }

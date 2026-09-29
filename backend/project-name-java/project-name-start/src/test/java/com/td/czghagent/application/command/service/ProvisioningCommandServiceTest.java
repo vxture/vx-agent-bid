@@ -263,6 +263,11 @@ class ProvisioningCommandServiceTest {
             this.state = state;
             this.lastSeq = seq;
         }
+
+        @Override
+        public java.util.List<Delivery> recentDeliveries(int limit) {
+            return java.util.List.of();
+        }
     }
 
     private static final class RecordingResolver implements EntitlementResolver {

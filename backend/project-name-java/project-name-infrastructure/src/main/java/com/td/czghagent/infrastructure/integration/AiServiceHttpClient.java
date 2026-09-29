@@ -156,6 +156,44 @@ public class AiServiceHttpClient implements DocumentParser, TenderAiGateway {
     }
 
     /**
+     * 系统验证：带这张票读 Atlas 的模型清单（不计量）。
+     *
+     * <p>票由调用方显式传入而不是在这里现铸：{@link AtlasCallCredentials#mint()} 把铸票失败
+     * 吞成 null，那正是业务路径该有的行为，却会让诊断页只看到「没带票」而看不到平台为什么拒。
+     */
+    public JsonNode atlasModels(S2SToken token) {
+        return atlasDiagnostic(client.get().uri("/internal/atlas/models"), token, "/internal/atlas/models");
+    }
+
+    /** 系统验证：对本产品会调用的每条 Atlas 路由各打一次最短调用。<strong>会花钱。</strong> */
+    public JsonNode atlasProbe(S2SToken token) {
+        return atlasDiagnostic(client.post().uri("/internal/atlas/probe")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(java.util.Map.of()), token, "/internal/atlas/probe");
+    }
+
+    private JsonNode atlasDiagnostic(RestClient.RequestHeadersSpec<?> request, S2SToken token,
+                                     String path) {
+        long started = System.nanoTime();
+        try {
+            JsonNode body = request
+                    .header("X-Internal-Token", internalToken)
+                    .headers(TaskHeaders::apply)
+                    .headers(headers -> AtlasCallCredentials.apply(headers, token))
+                    .retrieve()
+                    .body(JsonNode.class);
+            if (body == null) {
+                throw new BusinessException("AI_OUTPUT_INVALID", "AI 服务未返回结果", 502);
+            }
+            return body;
+        } catch (RestClientResponseException exception) {
+            throw responseFailure(exception, path, started);
+        } catch (RestClientException exception) {
+            throw transportFailure(exception, path, started);
+        }
+    }
+
+    /**
      * 发一次 AI 调用，必要时重铸一次票再来。
      *
      * <p>只重试<strong>拒票</strong>这一种失败，且只重一次。其余失败一概不重试：
