@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -451,17 +452,45 @@ def test_survives_an_error_body_that_is_not_json(caller: None) -> None:
 def test_every_call_says_which_operation_spent_it(caller: None) -> None:
     """featureId 是 Atlas 里把一份标书的推理消耗拆到环节上的唯一维度。
 
-    applicationId 刻意不送：Atlas 的授权查询把它按 UUID 转型，
-    送一个 operation 名会让调用以数据库转型错误失败。
+    applicationType 与 applicationId 必须成对：只送前者，Atlas 对每一次调用答
+    400 APPLICATION_ID_REQUIRED——v0.1.20 就这样让生产上全部模型调用中断。
+    applicationId 又必须是 UUID（Atlas 授权查询按 UUID 转型）。
     """
     provider, seen = _provider(_answers(_completion('{"value":"ok"}')))
 
     _run(provider, "consistency_review")
+    _run(provider, "chapter_drafting")
+
+    first, second = (json.loads(request.content) for request in seen)
+    assert first["applicationType"] == "agent"
+    assert first["featureId"] == "consistency_review"
+    assert "applicationId" in first, "送了 applicationType 就必须送 applicationId"
+    assert str(uuid.UUID(first["applicationId"])) == first["applicationId"]
+    # 同一个任务的调用归到同一个 application 下。
+    assert second["applicationId"] == first["applicationId"]
+
+
+def test_application_id_follows_the_task(caller: None) -> None:
+    provider, seen = _provider(_answers(_completion('{"value":"ok"}')))
+
+    _run(provider)
+    other = _task_id.set("task-2")
+    try:
+        _run(provider)
+    finally:
+        _task_id.reset(other)
+
+    ids = [json.loads(request.content)["applicationId"] for request in seen]
+    assert ids[0] != ids[1]
+
+
+def test_probe_carries_the_same_attribution_triple(caller: None) -> None:
+    provider, seen = _provider(_answers(_completion("pong")))
+
+    asyncio.run(provider.probe(FAST_ENDPOINT_CODE))
 
     body = json.loads(seen[0].content)
-    assert body["applicationType"] == "agent"
-    assert body["featureId"] == "consistency_review"
-    assert "applicationId" not in body
+    assert {"applicationType", "applicationId", "featureId"} <= set(body)
 
 
 @pytest.mark.parametrize(
