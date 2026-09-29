@@ -231,7 +231,7 @@ class AtlasProvider:
             # 也是 Atlas 侧的幂等键，以及在它请求日志里定位本次调用的唯一办法，
             # 所以在这里生成而不是交给服务端。
             "requestId": str(uuid.uuid4()),
-            **_attribution(operation),
+            **_attribution(operation, task_id),
         }
         if tenant_id:
             # tenantId 取自票里的 claim，<b>不是</b>产品码。送产品码看起来能跑：
@@ -336,7 +336,7 @@ class AtlasProvider:
             "maxTokens": 8,
             "taskId": task_id,
             "requestId": str(uuid.uuid4()),
-            **_attribution("diagnostics.atlas_probe"),
+            **_attribution("diagnostics.atlas_probe", task_id),
         }
         if tenant_id:
             body["tenantId"] = tenant_id
@@ -374,16 +374,29 @@ class AtlasProvider:
         }
 
 
-def _attribution(feature_id: str) -> dict[str, str]:
-    """Atlas 用来拆分消耗的两个字段。
+#: applicationId 的命名空间。固定值：同一个 task_id 在任何进程、任何时刻都得到同一个 id。
+_APPLICATION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://tenderforge.vxture.com/atlas/application")
+
+
+def _attribution(feature_id: str, task_id: str) -> dict[str, str]:
+    """Atlas 用来拆分消耗的三个字段，<b>必须一起送</b>。
 
     ``applicationType`` 固定为 ``agent``——本产品是一个智能体实例。
     ``featureId`` 是 operation 本身：请求体里没有别的维度能说明这一笔推理花在
-    解读、目录、正文还是审查上，而这正是运营对一份标书的成本要问的第一个问题。
-    ``applicationId`` 刻意不送：Atlas 在授权查询里把它按 UUID 转型，
-    送一个非 UUID（例如 operation 名）会让调用以数据库转型错误失败。
+    解读、目录、正文还是审查上。
+
+    ``applicationId`` 是 Atlas 的默认计量分组轴，两条硬约束都是生产上撞出来的：
+    送了 ``applicationType`` 就必须送它，否则每一次调用都是
+    ``400 APPLICATION_ID_REQUIRED``（2026-09-29 v0.1.20，全部模型调用中断）；
+    它又必须是 UUID——Atlas 的授权查询按 UUID 转型，送 operation 名会以数据库转型错误失败
+    （yucer 2026-09-28）。所以从 task_id 派生 UUIDv5：同一个任务的所有调用归到同一个
+    application 下，与 taskId 这个跨产品聚合键一一对应，而且构造上永远是合法 UUID。
     """
-    return {"applicationType": "agent", "featureId": feature_id}
+    return {
+        "applicationType": "agent",
+        "applicationId": str(uuid.uuid5(_APPLICATION_NAMESPACE, task_id)),
+        "featureId": feature_id,
+    }
 
 
 def _model_codes(body: Any) -> list[str]:

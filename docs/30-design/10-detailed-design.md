@@ -703,10 +703,12 @@ Python 根据 `AI_MODEL_REQUEST_DIALECT` 转换思考开关：`deepseek` 发送
 **只重一次**——其余失败一概不重试，因为每次调用都被计量，而最值得重试的操作恰好
 都不幂等。
 
-**请求体只有** `{endpointCode, messages, tenantId, taskId, requestId, applicationType, featureId}`。
+**请求体只有** `{endpointCode, messages, tenantId, taskId, requestId, applicationType, applicationId, featureId}`。
 `applicationType` 固定 `agent`；`featureId` 是 operation 本身——请求体里没有别的维度能说明一笔推理
-花在解读、目录、正文还是审查上。`applicationId` **刻意不送**：Atlas 的授权查询把它按 UUID 转型，
-送 operation 名这类非 UUID 会让调用以数据库转型错误失败（yucer 2026-09-28 实测）。没有 temperature、
+花在解读、目录、正文还是审查上。`applicationId` 与 `applicationType` **必须成对**：只送后者时 Atlas 对每一次
+调用答 `400 APPLICATION_ID_REQUIRED`（v0.1.20 因此全部模型调用中断，v0.1.21 修复）；它又必须是 UUID——
+Atlas 授权查询按 UUID 转型。所以取 task_id 的 UUIDv5：同一任务的调用归到同一个 application 下，
+构造上永远是合法 UUID。没有 temperature、
 没有 max_tokens、没有 response_format、没有 thinking 开关——这不是遗漏，Atlas 的路由
 优先级是 `modelCode > endpointCode > taskProfile`，生成参数属于 endpoint 的配置。
 产品这一侧能决定的只有「走哪条路由」。Atlas 2026-09-29 授予本产品十条通用路由
