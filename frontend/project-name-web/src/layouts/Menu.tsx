@@ -30,6 +30,7 @@ const iconMap: Record<string, IconName> = {
   library: 'building-library',
   'layout-dashboard': 'squares-four',
   'pen-line': 'edit',
+  'plugs-connected': 'plugs-connected',
   'shield-check': 'shield-check',
   'scroll-text': 'clipboard',
   'sliders-horizontal': 'faders',

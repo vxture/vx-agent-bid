@@ -59,6 +59,9 @@ public interface UsageBufferRepository {
     /** 清掉已冲洗且过了对账窗口的行。 */
     int purgeFlushedBefore(LocalDateTime before);
 
+    /** 尚未冲洗的行数。系统验证用它说明「上报链路是不是积压了」。 */
+    long countUnflushed();
+
     /**
      * 缓冲区里一条待冲洗的用量。
      *

@@ -8,9 +8,13 @@ Atlas 的 ``POST /v1/chat`` 请求体只有
 没有 max_tokens、没有 thinking 开关。生成参数属于 endpoint 的配置，不属于调用方；
 产品这一侧能决定的只有「这一次调用走哪条路由」。
 
-**路由是运营授权给本产品的四条通用路由**（owner 2026-09-14）：
+**Atlas 授予本产品十条通用路由**（owner 2026-09-29）：六条 chat、两条 embedding、
+两条 rerank。本产品只路由其中四条 chat：
 ``chat/deterministic`` / ``chat/fast`` / ``chat/default`` / ``chat/reasoning``。
-2026-09-11 请求六个专属 endpoint 的联络函就此被取代，见 ``docs/80-liaison``。
+其余六条（``chat/extract`` / ``chat/vision`` / ``embedding/*`` / ``rerank/*``）
+授权在手但没有调用点——``chat/extract`` 的生成参数未经本产品实测，按名字把抽取类
+operation 挪过去就是「按路由名字猜」，下面的分档规则明令不做。
+2026-09-11 请求六个专属 endpoint 的联络函已被取代，见 ``docs/80-liaison``。
 
 产品命名任务，运营决定每条路由挂哪个模型——改指向不需要发版。所以这里
 <b>只写任务到路由的对应</b>：不写模型名，也不开环境变量覆盖。一份可以被覆盖的
@@ -38,14 +42,21 @@ FAST_ENDPOINT_CODE = "chat/fast"
 DEFAULT_ENDPOINT_CODE = "chat/default"
 REASONING_ENDPOINT_CODE = "chat/reasoning"
 
-#: 运营授权给本产品的全部路由。映射里出现这之外的 code，
-#: 对应 operation 的每一次调用都是 ``403 NOT_ENTITLED``，与令牌是否有效无关。
+#: Atlas 授予本产品的全部路由（owner 2026-09-29，与 Atlas 侧授权逐条一致）。
+#: 映射里出现这之外的 code，对应 operation 的每一次调用都是 ``403 NOT_ENTITLED``，
+#: 与令牌是否有效无关。
 AUTHORIZED_ENDPOINT_CODES = frozenset(
     {
-        DETERMINISTIC_ENDPOINT_CODE,
-        FAST_ENDPOINT_CODE,
-        DEFAULT_ENDPOINT_CODE,
-        REASONING_ENDPOINT_CODE,
+        "chat/default",
+        "chat/deterministic",
+        "chat/extract",
+        "chat/fast",
+        "chat/reasoning",
+        "chat/vision",
+        "embedding/default",
+        "embedding/quality",
+        "rerank/default",
+        "rerank/quality",
     }
 )
 
@@ -107,3 +118,12 @@ def endpoint_for(operation: str) -> str:
     """
     route = OPERATION_ROUTES.get(operation)
     return route.endpoint_code if route else DEFAULT_ENDPOINT_CODE
+
+
+def routed_endpoint_codes() -> tuple[str, ...]:
+    """本产品真正会调用的路由，按字母序去重。
+
+    系统验证的 Atlas 探测逐条打这几条：授权清单里的其余路由没有调用点，
+    探它们证明不了本产品任何一条业务链路是通的。
+    """
+    return tuple(sorted({route.endpoint_code for route in OPERATION_ROUTES.values()}))

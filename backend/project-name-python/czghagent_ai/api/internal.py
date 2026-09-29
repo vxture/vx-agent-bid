@@ -25,7 +25,7 @@ from czghagent_ai.services.ai_provider import (
     ConfigurableTenderAiProvider,
     OpenAiCompatibleProvider,
 )
-from czghagent_ai.services.atlas_endpoints import AUTHORIZED_ENDPOINT_CODES
+from czghagent_ai.services.atlas_endpoints import AUTHORIZED_ENDPOINT_CODES, routed_endpoint_codes
 from czghagent_ai.services.atlas_provider import (
     AtlasNotEntitledError,
     AtlasProvider,
@@ -84,7 +84,7 @@ def describe_model_exit() -> str:
     if settings.atlas_api_url:
         return (
             f"模型出口：Atlas {settings.atlas_api_url}"
-            f"（按任务分走 {' / '.join(sorted(AUTHORIZED_ENDPOINT_CODES))}）"
+            f"（按任务分走 {' / '.join(routed_endpoint_codes())}）"
         )
     if settings.deploy_stage in _DEPLOYED_STAGES:
         return (
@@ -131,7 +131,8 @@ def create_ai_provider() -> ConfigurableTenderAiProvider:
     )
 
 
-tender_ai_service = TenderAiService(create_ai_provider())
+model_exit = create_ai_provider()
+tender_ai_service = TenderAiService(model_exit)
 
 
 def require_internal_token(x_internal_token: str = Header(default="")) -> None:
@@ -477,3 +478,57 @@ async def render_tender_document(body: DocumentRenderRequest) -> Response:
             "X-QA-Summary-Base64": encoded_summary,
         },
     )
+
+
+# ── 系统验证：Atlas 探测 ─────────────────────────────────────────────────────
+#
+# 票由 Java 侧现铸并随请求头转呈，与业务调用同一条链：这两个端点证明的是
+# 「本产品的模型调用能走通」，而不是「某条专门的诊断线路能走通」。
+
+
+class AtlasProbeRequest(BaseModel):
+    """要探测的路由；不送则逐条探测本产品真正会调用的路由。"""
+
+    endpointCodes: list[str] | None = None  # 线上契约是 camelCase
+
+
+def _atlas_exit() -> AtlasProvider:
+    if not isinstance(model_exit, AtlasProvider):
+        raise ServiceError(
+            "AI_ATLAS_NOT_CONFIGURED",
+            "本进程没有走 Atlas：ATLAS_API_URL 未配置，模型调用正在直连供应商",
+            503,
+            retryable=False,
+        )
+    return model_exit
+
+
+@router.get("/atlas/models", dependencies=[Depends(require_internal_token)])
+async def list_atlas_models() -> dict[str, object]:
+    """带票读 Atlas 的模型清单。不计量。"""
+    try:
+        codes = await _atlas_exit().list_models()
+    except AiProviderError as exception:
+        raise map_ai_error(exception) from exception
+    return {"count": len(codes), "models": codes}
+
+
+@router.post("/atlas/probe", dependencies=[Depends(require_internal_token)])
+async def probe_atlas(body: AtlasProbeRequest) -> dict[str, object]:
+    """对每条路由各发一次最短的真实调用。<b>会花钱</b>，由 Atlas 自行计量。
+
+    只接受授权清单里的路由：这是一个会花钱的端点，不能让它变成
+    「随便挑一个 code 打一次」的通道。逐条顺序执行——并发只省几秒，
+    却会让同一个 task_id 下的几笔消耗在 Atlas 日志里交错。
+    """
+    provider = _atlas_exit()
+    codes = body.endpointCodes or list(routed_endpoint_codes())
+    unknown = sorted(set(codes) - AUTHORIZED_ENDPOINT_CODES)
+    if unknown:
+        raise ServiceError(
+            "AI_ATLAS_ENDPOINT_NOT_AUTHORIZED",
+            f"不在本产品的 Atlas 授权清单里：{', '.join(unknown)}",
+            422,
+            retryable=False,
+        )
+    return {"results": [await provider.probe(code) for code in codes]}

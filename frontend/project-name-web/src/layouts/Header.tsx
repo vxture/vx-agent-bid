@@ -151,7 +151,13 @@ function AccountPanel() {
         />
       }
       // 管理员与编制人员同一个入口：账号归平台，本产品不再有本地账号管理页。
-      links={[{ key: 'account', label: '个人资料', href: '/planner/account', icon: 'user-circle' }]}
+      // 登录一律落在编制首页，管理员从这里进管理面（审计日志、系统验证）。
+      links={[
+        { key: 'account', label: '个人资料', href: '/planner/account', icon: 'user-circle' },
+        ...(user?.admin
+          ? [{ key: 'console', label: '系统管理', href: '/console/audit-logs', icon: 'shield-check' as const }]
+          : []),
+      ]}
       actions={[
         {
           key: 'logout',
@@ -167,7 +173,15 @@ function AccountPanel() {
 
 export default function LayoutHeader() {
   const user = useAuthStore((state) => state.user)
-  const menuItems = getMenuListByPortal(user?.admin ? 'admin' : 'planner')
+  // 管理员两边都用：登录落在编制首页，搜索框同样要能直达管理面。
+  const isAdmin = Boolean(user?.admin)
+  const menuItems = useMemo(
+    () =>
+      isAdmin
+        ? [...getMenuListByPortal('planner'), ...getMenuListByPortal('admin')]
+        : getMenuListByPortal('planner'),
+    [isAdmin]
+  )
   const search = usePortalSearch(menuItems)
 
   return (

@@ -77,6 +77,17 @@ export const adminMenuList: MenuItem[] = [
       isFull: false,
     },
   },
+  {
+    name: 'Diagnostics',
+    path: '/console/diagnostics',
+    meta: {
+      icon: 'plugs-connected',
+      title: '系统验证',
+      description: '与平台和 Atlas 的对接是否健康',
+      isHide: false,
+      isFull: false,
+    },
+  },
 ]
 
 export const getPortalKind = (pathname: string): PortalKind =>

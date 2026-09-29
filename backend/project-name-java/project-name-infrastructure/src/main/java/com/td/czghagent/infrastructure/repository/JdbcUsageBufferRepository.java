@@ -140,6 +140,13 @@ public class JdbcUsageBufferRepository implements UsageBufferRepository {
                 before);
     }
 
+    @Override
+    public long countUnflushed() {
+        Long count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM platform_usage_event WHERE flushed_at IS NULL", Long.class);
+        return count == null ? 0 : count;
+    }
+
     /** 分块，免得一次冲洗把上千个占位符塞进一条语句里。 */
     private static void inChunks(List<String> keys, java.util.function.Consumer<List<String>> action) {
         for (int start = 0; start < keys.size(); start += 200) {

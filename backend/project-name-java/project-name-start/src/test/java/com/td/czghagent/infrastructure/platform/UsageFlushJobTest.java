@@ -292,6 +292,11 @@ class UsageFlushJobTest {
         public int purgeFlushedBefore(LocalDateTime before) {
             return 0;
         }
+
+        @Override
+        public long countUnflushed() {
+            return 0;
+        }
     }
 
     private static final class RecordingResolver implements EntitlementResolver {

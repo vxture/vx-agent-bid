@@ -103,8 +103,25 @@ Compose 项目名是 `tenderforge`（`docker-compose.yml` 顶层 `name:`），�
 | C2 权益（`GET /platform/entitlements`，45s 缓存不落库） | **代码已落地**；生产配置齐全（2026-09-27 实测：`PLATFORM_API_URL`/`ATLAS_API_URL`/OIDC 全在，`ALLOW_MOCK_ON_DEPLOY=false`）；卡在平台换票覆盖门 `invalid_target`（本产品尚无订阅/开通，日志可见），接入认证落下沙箱订阅后即可活体验证；`GET /api/entitlement` 发能力集与两条门控公式；**命令入口强制判定**（`EntitlementGuard`，见 §11） |
 | C3 上行（`POST /usage/consume`，缓冲 + 冲洗，永远 200） | **代码已落地**；生产配置齐全（2026-09-27 实测：`PLATFORM_API_URL`/`ATLAS_API_URL`/OIDC 全在，`ALLOW_MOCK_ON_DEPLOY=false`）；卡在平台换票覆盖门 `invalid_target`（本产品尚无订阅/开通，日志可见），接入认证落下沙箱订阅后即可活体验证；见 §10.4 |
 | C3 下发（provisioning webhook，HMAC 原始字节验签） | **代码已落地**，等平台配置投递地址与密钥；见 §10.5 |
-| Atlas 唯一模型出口 | **代码已落地**，见 §8.3；未配 `ATLAS_API_URL` 时仍直连，部署态拒绝以直连启动 |
+| Atlas 唯一模型出口 | **代码已落地**，见 §8.3；Atlas 2026-09-29 授予本产品十条路由；未配 `ATLAS_API_URL` 时仍直连，部署态拒绝以直连启动 |
 | 被调方半边（八条验票、`/.well-known/vxture-tools`） | 未接入 |
+| Runos 能力面 | 未接入：本产品没有调用 Runos 能力的业务点，系统验证不列这一项 |
+
+**上表是快照，会烂；实测以「系统验证」为准。**管理端 `/console/diagnostics`（后端
+`GET /api/admin/platform-check`）每次打开都按业务路径真打一遍：C1 发现文档与 JWKS、按业务原样
+铸两张票（给 Atlas 的 OBO / service 票与给平台面的 service 票）、C2 直读一次权益（不经 45 秒缓存，
+带回平台实际下发的 `Cache-Control`）、C3 上行缓冲积压、C3 下行验签自检与最近投递、带票读 Atlas
+模型清单——全部只读、不产生费用。会花钱的两项各自单独成卡、必须经确认对话框才触发，并记审计
+（`PLATFORM_PROBE_ATLAS` / `PLATFORM_PROBE_USAGE_REPLAY`）：Atlas 活体探测对本产品实际使用的
+每条路由各打一次最短调用（补全上限 8 token），C3 重放校验以按日稳定的幂等键上报两次
+`tenderforge.document.exports`，第二次必须答 `replayed:true` 且带回同一个 `event_id`。
+版式与探测项照 yucer 的系统验证；Atlas 两项经 Python `/internal/atlas/*` 转一跳，因为那正是生成
+正文时的那一跳。
+
+C2 读到 `invalid_target` 是平台的**答复**而不是故障：平台面 service 票受 D2 覆盖门约束，
+本产品在该工作空间没有有效订阅或开通时平台拒绝铸票，权益读取据此答「未订阅」；
+页面把它与换票故障分开显示。OBO 换票不过覆盖门，所以同一个工作空间里给 Atlas 的 OBO 票
+可以铸出而平台面的票被拒，这是正常组合。
 
 **登记的偏离，两条，均带失效条件：**
 
@@ -206,7 +223,7 @@ Compose 项目名是 `tenderforge`（`docker-compose.yml` 顶层 `name:`），�
 | 路由 | 页面 | 访问规则 |
 | --- | --- | --- |
 | `/login` | 登录 | 公开 |
-| `/`、`/planner` | 角色入口重定向 | 已登录 |
+| `/`、`/planner` | 登录落点：一律重定向到 `/planner/writing`，管理员也不例外；管理员经账号菜单「系统管理」进入 `/console` | 已登录 |
 | `/planner/writing` | 编写方式 | `PLANNER` |
 | `/planner/assets` | 个人素材 | `PLANNER` |
 | `/planner/bids` | 我的标书 | `PLANNER` |
@@ -218,6 +235,7 @@ Compose 项目名是 `tenderforge`（`docker-compose.yml` 顶层 `name:`），�
 | `/planner/bids/{id}/generating` | 正文生成进度 | 所有者 |
 | `/planner/bids/{id}/content` | 正文编辑、审查、排版和下载 | 所有者 |
 | `/console/audit-logs` | 审计日志 | `ADMIN` |
+| `/console/diagnostics` | 系统验证（平台对接与 Atlas 实测，见 §2.1） | `ADMIN` |
 | `/403`、`/404`、`/500` | 错误页 | 按错误进入 |
 
 `AuthGuard` 先通过 `ShellBootScreen` 等待当前用户恢复，再执行登录和角色校验；Java 仍是最终
@@ -469,6 +487,9 @@ Compose 中 `api` 只提交工作流，`worker` 注册四个队列并执行 Acti
 | `POST` | `/api/auth/logout` | **唯一的登出入口**，撤销当前平台会话并清 cookie，返回 `{ logoutUrl }`：平台登出端点 + `client_id` + `post_logout_redirect_uri`，前端顶层导航过去结束账户中心会话；替身、配置不全或身份服务不可达时为 `null`，退回 `/login` |
 | `GET` | `/api/status` | 平台接入自证：四条通道的真实状态；只报状态不报值 |
 | `GET` | `/api/admin/audit-logs` | 按关键字、动作、结果和时间查询审计，键集游标翻页 |
+| `GET` | `/api/admin/platform-check` | 系统验证只读探测，每次真打一遍；每项 `{configured, ok, detail}`，`detail` 不含密钥 |
+| `POST` | `/api/admin/platform-check/atlas-probe` | **会花钱**：对本产品使用的每条 Atlas 路由各打一次最短调用，逐条返回结论；记审计 |
+| `POST` | `/api/admin/platform-check/usage-replay-probe` | **会花钱**：C3 幂等重放，同一幂等键上报两次；每工作空间每天至多一笔；记审计 |
 
 ### 7.2 素材与标书
 
@@ -563,6 +584,8 @@ HttpOnly cookie 里，浏览器读不到它。
 | `POST` | `/internal/tender/revision` | 选区和上下文 -> 局部修改候选 |
 | `POST` | `/internal/tender/review` | 全部章节有界摘录 -> 审查问题、覆盖率和摘要；`chapterId` 必须来自 `allowedChapterIds` |
 | `POST` | `/internal/tender/document/render` | 文档模型 -> DOCX bytes 和 QA headers |
+| `GET` | `/internal/atlas/models` | 系统验证：带 Java 转呈的票读 Atlas `/v1/models`，返回 `{count, models}`；不计量 |
+| `POST` | `/internal/atlas/probe` | 系统验证：`{endpointCodes?}`，缺省为本产品实际路由；授权清单外的 code 422 拒绝；逐条 `{endpointCode, ok, modelCode?, code?, message?}`，一条失败不遮其余；**会花钱** |
 
 除 `/health` 与 `/ready` 外均校验 `X-Internal-Token`（常量时间比较；「没带」与「带错」
 返回同一个码，区分它们只对攻击者有用）。
@@ -680,11 +703,18 @@ Python 根据 `AI_MODEL_REQUEST_DIALECT` 转换思考开关：`deepseek` 发送
 **只重一次**——其余失败一概不重试，因为每次调用都被计量，而最值得重试的操作恰好
 都不幂等。
 
-**请求体只有** `{endpointCode, messages, tenantId, taskId, requestId}`。没有 temperature、
+**请求体只有** `{endpointCode, messages, tenantId, taskId, requestId, applicationType, featureId}`。
+`applicationType` 固定 `agent`；`featureId` 是 operation 本身——请求体里没有别的维度能说明一笔推理
+花在解读、目录、正文还是审查上。`applicationId` **刻意不送**：Atlas 的授权查询把它按 UUID 转型，
+送 operation 名这类非 UUID 会让调用以数据库转型错误失败（yucer 2026-09-28 实测）。没有 temperature、
 没有 max_tokens、没有 response_format、没有 thinking 开关——这不是遗漏，Atlas 的路由
 优先级是 `modelCode > endpointCode > taskProfile`，生成参数属于 endpoint 的配置。
-产品这一侧能决定的只有「走哪条路由」。运营 2026-09-14 授权了四条通用路由，
-operation 到路由的对应**只写在** `atlas_endpoints.OPERATION_ROUTES` 一处，
+产品这一侧能决定的只有「走哪条路由」。Atlas 2026-09-29 授予本产品十条通用路由
+（`chat/default` · `chat/deterministic` · `chat/extract` · `chat/fast` · `chat/reasoning` · `chat/vision` ·
+`embedding/default` · `embedding/quality` · `rerank/default` · `rerank/quality`，即
+`AUTHORIZED_ENDPOINT_CODES`），本产品只路由其中四条 chat；其余六条授权在手而没有调用点——
+`chat/extract` 的生成参数未经本产品实测，按名字把抽取类 operation 挪过去就是「按路由名字猜」。
+启动日志的模型出口一行只列实际路由。operation 到路由的对应**只写在** `atlas_endpoints.OPERATION_ROUTES` 一处，
 不写模型名、不开环境变量覆盖——路由挂哪个模型由运营改指向，不需要发版。
 
 分档依据是 §8.1 实测出来的策略，取第一条命中的：开 thinking → `chat/reasoning`；
@@ -720,7 +750,8 @@ Atlas 强制要求 `taskId`，缺失即 400，于是主流程全部失败而手�
 
 1. `ATLAS_API_URL` 与平台凭据（铸不出票就调不了 Atlas）。
 2. ~~Atlas 的 endpoint 授权~~ —— 2026-09-14 四条通用路由已授权，降级开关
-   `ATLAS_USE_DEDICATED_ENDPOINTS` 同日退役。仍需运营核对的是各路由所挂模型
+   `ATLAS_USE_DEDICATED_ENDPOINTS` 同日退役；2026-09-29 扩为十条。逐条是否真能走通，
+   用系统验证的「Atlas 活体探测」实测。仍需运营核对的是各路由所挂模型
    满足联络函 30 里的下限；不满足没有错误码，只让标书变差或偶发截断。
 3. **平台身份**。铸票要真实 workspace，而本地口令登录的租户是 `local:<用户id>`，
    平台那边不存在。也就是说 **Atlas 迁移在 C1 切换之前无法真正生效**——
