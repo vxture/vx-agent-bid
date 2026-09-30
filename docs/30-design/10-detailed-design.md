@@ -734,7 +734,8 @@ Atlas 授权查询按 UUID 转型。所以取 task_id 的 UUIDv5：同一任务�
 - `thinking`：走 `chat/reasoning` 的三个 operation 为 `"on"`，其余一律 `"off"`（`atlas_endpoints.thinking_for`）。
   不传即上游默认，而默认通常是开。
 - `temperature`：§8.1 的温度列；`maxTokens`：§8.1 中有显式上限的 operation 才送。
-- `timeoutMs`：`ATLAS_TIMEOUT_SECONDS` 减 2 秒。超时由 Atlas 执行——取消上游、停止计费、答
+- `timeoutMs`：`AI_MODEL_TIMEOUT_SECONDS`（240）减 2 秒，与直连同一档单次预算。曾经取自单独的
+  `ATLAS_TIMEOUT_SECONDS=90`，开推理的目录策略因此在 88 秒被 Atlas 取消（2026-09-30），该变量已退役。超时由 Atlas 执行——取消上游、停止计费、答
   `504 DEADLINE_EXCEEDED`。不带它时，我们到读超时断开并重试，而 Atlas 仍让上游生成计费。
 
 **Atlas 的拒绝码**（全部不可重试）：`PAYLOAD_TOO_LARGE` / `CONTEXT_LENGTH_EXCEEDED` /

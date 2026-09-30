@@ -421,3 +421,13 @@ def test_a_model_failure_carries_its_diagnostics_in_the_envelope(monkeypatch: py
     assert body["details"]["stage"] == "chapter_drafting"
     assert body["details"]["atlasCode"] == "DEADLINE_EXCEEDED"
     assert body["details"]["attempts"] == 2
+
+
+def test_atlas_gets_the_same_per_call_budget_as_the_direct_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """开推理的调用合法地需要数分钟：曾经单独的 90 秒让 Atlas 在 88 秒取消了目录策略。"""
+    _use_settings(monkeypatch, atlas_api_url="http://atlas.local", ai_model_timeout_seconds=240)
+
+    provider = internal.create_ai_provider()
+
+    assert isinstance(provider, AtlasProvider)
+    assert provider._deadline_ms == 238_000

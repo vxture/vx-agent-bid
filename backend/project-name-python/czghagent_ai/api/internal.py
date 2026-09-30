@@ -108,7 +108,8 @@ def create_ai_provider() -> ConfigurableTenderAiProvider:
     if settings.atlas_api_url:
         return AtlasProvider(
             settings.atlas_api_url,
-            timeout_seconds=settings.atlas_timeout_seconds,
+            # 与直连同一档单次预算（详细设计 §8.2 的 240 / 540 / 600 / 720 链）。
+            timeout_seconds=settings.ai_model_timeout_seconds,
             max_retries=settings.ai_model_max_retries,
         )
     if settings.deploy_stage in _DEPLOYED_STAGES and not settings.allow_mock_on_deploy:

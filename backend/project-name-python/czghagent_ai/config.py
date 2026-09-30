@@ -22,7 +22,6 @@ class Settings:
     deploy_stage: str
     allow_mock_on_deploy: bool
     atlas_api_url: str
-    atlas_timeout_seconds: float
     ai_model_api_key: str
     ai_model_base_url: str
     ai_model_request_dialect: AiModelRequestDialect
@@ -43,7 +42,6 @@ class Settings:
             allow_mock_on_deploy=os.getenv("ALLOW_MOCK_ON_DEPLOY", "").strip().lower()
             in {"1", "true", "yes"},
             atlas_api_url=os.getenv("ATLAS_API_URL", "").strip(),
-            atlas_timeout_seconds=float(os.getenv("ATLAS_TIMEOUT_SECONDS", "90")),
             ai_model_api_key=os.getenv("AI_MODEL_API_KEY", "").strip(),
             ai_model_base_url=os.getenv(
                 "AI_MODEL_BASE_URL", "https://api.deepseek.com"
