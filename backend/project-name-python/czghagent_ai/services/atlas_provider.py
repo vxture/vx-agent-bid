@@ -137,10 +137,13 @@ class AtlasOutputBudgetExhaustedError(AiProviderError):
 
     code = "AI_OUTPUT_BUDGET_EXHAUSTED"
 
-#: Atlas 自己的上游首字节超时是 30 秒，且主模型超时后可能再试 endpoint 的备选，
-#: 所以一次调用合法地超过 60 秒。这个上限是留给 Atlas 把话说完的——
-#: 卡得更短只会把它结构化的失败换成一个我们这一侧看不懂的连接中断。
-_DEFAULT_TIMEOUT_SECONDS = 90.0
+#: 单次调用的预算，与直连同一档（``AI_MODEL_TIMEOUT_SECONDS``，详细设计 §8.2 的
+#: 240 / 540 / 600 / 720 链的第一环）。
+#:
+#: 这里曾经是单独的 ``ATLAS_TIMEOUT_SECONDS=90``，只按解读类的短调用定。v0.1.22 起它还
+#: 决定交给 Atlas 的 ``timeoutMs``，于是开推理的目录策略在 88 秒被 Atlas 按时限取消
+#: （2026-09-30，DEADLINE_EXCEEDED）——推理路由上的调用合法地需要数分钟。
+_DEFAULT_TIMEOUT_SECONDS = 240.0
 
 
 class AtlasProvider:

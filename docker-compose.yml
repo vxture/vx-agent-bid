@@ -61,7 +61,6 @@ services:
       DEPLOY_STAGE: ${DEPLOY_STAGE:?必须显式设置（local/dev/beta/production）——缺省成 local 会静默放行替身}
       ALLOW_MOCK_ON_DEPLOY: ${ALLOW_MOCK_ON_DEPLOY:-false}
       ATLAS_API_URL: ${ATLAS_API_URL:-}
-      ATLAS_TIMEOUT_SECONDS: ${ATLAS_TIMEOUT_SECONDS:-90}
       AI_MODEL_API_KEY: ${AI_MODEL_API_KEY:-}
       AI_MODEL_BASE_URL: ${AI_MODEL_BASE_URL:-https://api.deepseek.com}
       AI_MODEL_REQUEST_DIALECT: ${AI_MODEL_REQUEST_DIALECT:-deepseek}
