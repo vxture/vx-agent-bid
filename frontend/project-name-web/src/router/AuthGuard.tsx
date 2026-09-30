@@ -12,7 +12,7 @@ import { hasSignedOutMarker } from '@/app/auth/signed-out-marker'
 import { SignIn } from '@/app/components/sign-in'
 import { SignedOut } from '@/app/components/signed-out'
 import { consoleUrl } from '@/app/lib/console-url'
-import { useMessages } from '@/app/lib/i18n/provider'
+import { useMessages } from '@/app/lib/i18n/use-messages'
 import { useAuthStore } from '@/stores/auth'
 
 interface AuthGuardProps {

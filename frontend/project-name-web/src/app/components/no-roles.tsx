@@ -8,7 +8,7 @@ import { GateFrame } from './gate-frame'
 import { GateHeading } from './gate-heading'
 import { GateIdentity, type GateIdentityProps } from './gate-identity'
 
-import { useMessages } from '../lib/i18n/provider'
+import { useMessages } from '../lib/i18n/use-messages'
 
 // 工作区已订阅、成员还没有角色（参照 vx-agent-yucer app/(app)/components/no-roles.tsx，照搬）。
 //

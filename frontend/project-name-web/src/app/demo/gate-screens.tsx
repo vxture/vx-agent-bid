@@ -10,7 +10,7 @@ import { NoRoles } from '../components/no-roles'
 import { NoSubscription } from '../components/no-subscription'
 import { SignIn } from '../components/sign-in'
 import { SignedOut } from '../components/signed-out'
-import { useMessages } from '../lib/i18n/provider'
+import { useMessages } from '../lib/i18n/use-messages'
 
 // 四张门禁页的预览，不需要会话，也不需要平台（参照 vx-agent-yucer app/(demo)/gate-screens/page.tsx，照搬）。
 //

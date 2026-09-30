@@ -1,7 +1,7 @@
 // GENERATED_BY_AI
 // MODEL: claude-opus-5
 // DATE: 2026-09-15
-import { DEFAULT_LOCALE, LOCALE_CONSTANTS, SUPPORTED_LOCALES, type Locale } from '@vxture/shared'
+import { DEFAULT_LOCALE, type Locale, LOCALE_CONSTANTS, SUPPORTED_LOCALES } from '@vxture/shared'
 
 // 这次访问用哪种语言（参照 vx-agent-yucer app/(app)/lib/i18n/locale.ts）。
 //

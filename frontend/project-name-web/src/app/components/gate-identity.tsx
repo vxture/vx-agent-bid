@@ -3,7 +3,7 @@
 // DATE: 2026-09-16
 import { Card, Icon, UserAvatar } from '@vxture/design-ui'
 
-import { useMessages } from '../lib/i18n/provider'
+import { useMessages } from '../lib/i18n/use-messages'
 
 // 门禁页上「谁在登录、在哪个工作区」的身份块（owner 2026-09-16）。
 //

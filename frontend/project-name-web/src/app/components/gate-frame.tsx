@@ -12,10 +12,10 @@ import {
   useTheme,
 } from '@vxture/design-system'
 import { Button, Icon } from '@vxture/design-ui'
-import { LOCALE_CONFIGS, SUPPORTED_LOCALES, type Locale } from '@vxture/shared'
+import { type Locale, LOCALE_CONFIGS, SUPPORTED_LOCALES } from '@vxture/shared'
 
 import { BRAND_MARK_SRC, BRAND_WORDMARK, PRODUCT_MARK_SRC } from '../lib/brand-assets'
-import { useLocale, useMessages, useSetLocale } from '../lib/i18n/provider'
+import { useLocale, useMessages, useSetLocale } from '../lib/i18n/use-messages'
 import { websiteUrl } from '../lib/website-url'
 
 // 四张门禁页共用的框架（门禁页规范；参照 vx-agent-yucer app/(app)/components/gate-frame.tsx，照搬）。

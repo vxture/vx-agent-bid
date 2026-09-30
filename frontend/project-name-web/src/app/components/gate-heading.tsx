@@ -3,7 +3,7 @@
 // DATE: 2026-09-15
 import type { ReactNode } from 'react'
 
-import { StatusBadge, type IconName } from '@vxture/design-ui'
+import { type IconName, StatusBadge } from '@vxture/design-ui'
 
 // 每张门禁页中段开头的标题块（参照 vx-agent-yucer app/(app)/components/gate-heading.tsx，照搬）。
 //
