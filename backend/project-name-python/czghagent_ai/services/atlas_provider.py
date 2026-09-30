@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from typing import Any, TypeVar
@@ -199,20 +200,31 @@ class AtlasProvider:
             )
 
         request = self._request(operation, payload, response_model, task_id, tenant_id)
+        # 流式调用。上游模型在非流式模式下要把整段答案生成完才回响应头，而 Atlas 对「等响应头」
+        # 只给 30 秒——2026-09-30 正文续写在 23–29 秒的都成功、稍长一点的全部在 30.0 秒
+        # PROVIDER_UNAVAILABLE（含备选模型）。流式时上游立刻回头、再逐段送文本，
+        # 那 30 秒的门槛不再相关；整次调用仍受 timeoutMs 约束。
+        request["stream"] = True
         started = time.monotonic()
         for attempt in range(self._max_retries + 1):
             try:
                 async with httpx.AsyncClient(
                     timeout=self._timeout, transport=self._transport
                 ) as client:
-                    response = await client.post(
+                    async with client.stream(
+                        "POST",
                         f"{self._base_url}/v1/chat",
                         headers={
                             "Authorization": f"Bearer {token}",
-                            "Accept": "application/json",
+                            "Accept": "text/event-stream, application/json",
                         },
                         json=request,
-                    )
+                    ) as streamed:
+                        if streamed.status_code >= 400:
+                            await streamed.aread()
+                            response = streamed
+                        else:
+                            response = await _collect_stream(streamed)
             except httpx.TimeoutException as exception:
                 if attempt >= self._max_retries:
                     raise AiProviderTimeoutError(
@@ -236,6 +248,8 @@ class AtlasProvider:
 
             if response.status_code < 400:
                 return self._decode_response(response, operation, attempt + 1)
+            # 走到这里的 response 要么是 HTTP 层的拒绝（已读完正文），要么是流中途的
+            # error 帧折算出的同形状封套——两者走同一套翻译与重试判断。
 
             error = _atlas_error(response, operation, attempt + 1, started)
             if _should_retry(error, response) and attempt < self._max_retries:
@@ -585,6 +599,63 @@ def _model_codes(body: Any) -> list[str]:
             if isinstance(code, str):
                 codes.append(code)
     return codes
+
+async def _collect_stream(response: httpx.Response) -> httpx.Response:
+    """把 Atlas 的 SSE 帧收成与非流式同形状的响应，交给同一套解码与错误翻译。
+
+    帧：``text``（增量）、``done``（用量与 finishReason）、``error``（中途失败，
+    状态码此时已是 200 且不会再变）。``UPSTREAM_FRAME_UNPARSEABLE`` 是 Atlas 注明
+    「流会继续」的唯一错误码，跳过；其余 error 帧折算成 X-1 封套。
+    没收到 ``done`` 就结束的流按「不完整」处理——把半截答案当完整答案用是最坏的结局。
+    其他帧类型（例如推理增量）忽略：正文只取 ``text``。
+    """
+    if "text/event-stream" not in response.headers.get("content-type", ""):
+        # 被调方没有按流回答（例如按 JSON 一次性给出）：原样读完，按非流式解码。
+        await response.aread()
+        return response
+    parts: list[str] = []
+    done: dict[str, Any] | None = None
+    async for line in response.aiter_lines():
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:"):].strip()
+        if not data:
+            continue
+        if data == "[DONE]":
+            break
+        try:
+            frame = json.loads(data)
+        except ValueError:
+            continue
+        if not isinstance(frame, dict):
+            continue
+        kind = frame.get("type")
+        if kind == "text" and isinstance(frame.get("delta"), str):
+            parts.append(frame["delta"])
+        elif kind == "done":
+            done = frame
+            break
+        elif kind == "error":
+            if frame.get("code") == "UPSTREAM_FRAME_UNPARSEABLE":
+                continue
+            return httpx.Response(502, json={
+                "code": frame.get("code") or "UNKNOWN",
+                "message": frame.get("message") or "Atlas 流中途失败",
+                **({"retryable": frame["retryable"]} if isinstance(frame.get("retryable"), bool) else {}),
+            })
+    if done is None:
+        return httpx.Response(502, json={
+            "code": "STREAM_INCOMPLETE",
+            "message": "Atlas 的流在 done 帧之前结束，答案不完整",
+            "retryable": True,
+        })
+    return httpx.Response(200, json={
+        "message": {"role": "assistant", "content": "".join(parts)},
+        "finishReason": done.get("finishReason"),
+        "usage": done.get("usage") or {},
+        "thinking": done.get("thinking"),
+    })
+
 
 def _atlas_diagnostics(
     body: dict[str, Any], content: str, finish_reason: str | None, attempts: int

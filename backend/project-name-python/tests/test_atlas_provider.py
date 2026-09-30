@@ -751,3 +751,74 @@ def test_a_route_missing_from_the_list_fails(caller: None) -> None:
 
     route = next(item for item in result["routes"] if item["endpointCode"] == "chat/fast")
     assert route["ok"] is False
+
+
+# ── 流式调用（上游非流式时要生成完才回头，Atlas 等响应头只给 30 秒） ──────────
+
+
+def _sse(*frames: object) -> Handler:
+    body = "".join(
+        f"data: {frame if isinstance(frame, str) else json.dumps(frame, ensure_ascii=False)}\n\n"
+        for frame in frames
+    )
+    return lambda request: httpx.Response(
+        200, content=body.encode("utf-8"), headers={"content-type": "text/event-stream"}
+    )
+
+
+def test_business_calls_ask_atlas_to_stream(caller: None) -> None:
+    provider, seen = _provider(_answers(_completion('{"value":"ok"}')))
+
+    _run(provider)
+
+    assert json.loads(seen[0].content)["stream"] is True
+    assert "text/event-stream" in seen[0].headers["accept"]
+
+
+def test_text_frames_are_assembled_into_the_answer(caller: None) -> None:
+    provider, _ = _provider(_sse(
+        {"type": "text", "delta": '{"val'},
+        {"type": "text", "delta": 'ue":"流式"}'},
+        {"type": "done", "finishReason": "stop",
+         "usage": {"promptTokens": 10, "completionTokens": 5, "totalTokens": 15}},
+        "[DONE]",
+    ))
+
+    result = _run(provider)
+
+    assert result.data == {"value": "流式"}
+    assert result.diagnostics.output_tokens == 5
+
+
+def test_a_mid_stream_error_is_translated_like_an_http_error(caller: None) -> None:
+    provider, seen = _provider(_sse(
+        {"type": "text", "delta": '{"va'},
+        {"type": "error", "code": "CONTEXT_LENGTH_EXCEEDED", "message": "too long", "retryable": False},
+    ))
+
+    with pytest.raises(AtlasInputTooLargeError):
+        _run(provider)
+
+    assert len(seen) == 1, "不可重试的中途失败不重发"
+
+
+def test_a_stream_that_ends_before_done_is_not_taken_as_a_complete_answer(caller: None) -> None:
+    """半截答案当完整答案用是最坏的结局：没有 done 帧就按不完整处理（可重试一次）。"""
+    provider, seen = _provider(_sse({"type": "text", "delta": '{"value":"半截'}))
+
+    with pytest.raises(AiProviderError) as caught:
+        _run(provider)
+
+    assert "STREAM_INCOMPLETE" in str(caught.value)
+    assert len(seen) == 2, "不完整的流重试一次"
+
+
+def test_an_unparseable_upstream_frame_does_not_discard_a_good_answer(caller: None) -> None:
+    provider, _ = _provider(_sse(
+        {"type": "text", "delta": '{"value":'},
+        {"type": "error", "code": "UPSTREAM_FRAME_UNPARSEABLE", "message": "one bad frame"},
+        {"type": "text", "delta": '"ok"}'},
+        {"type": "done", "finishReason": "stop", "usage": {}},
+    ))
+
+    assert _run(provider).data == {"value": "ok"}

@@ -306,9 +306,9 @@ def merge_outline(
         for skeleton_node in skeleton.nodes
         if skeleton_node.level == 2
     }
+    # 只带骨架阶段系统算出的提示；三级展开里模型自带的 warnings 是自述，不展示给用户。
     warnings = [*skeleton.warnings]
     for expansion in expansions:
-        warnings.extend(expansion.warnings)
         for expansion_node in expansion.nodes:
             expanded_by_parent.setdefault(expansion_node.parent_key, []).append(expansion_node)
     skeleton_children: dict[str, list[OutlineSkeletonNode]] = {}
