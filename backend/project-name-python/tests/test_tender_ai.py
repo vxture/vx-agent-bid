@@ -573,7 +573,8 @@ def test_outline_top_level_pages_are_balanced_to_target() -> None:
     assert all(node.planned_pages == 0 for node in result.nodes if node.level > 1)
     assert result.nodes[-1].scoring_point_ids == ["SP-001"]
     assert result.coverage[0].node_keys
-    assert result.warnings
+    # 页数规整是系统内部动作，不作为提示展示给用户。
+    assert not any("normalized" in warning for warning in result.warnings)
 
 
 def test_outline_payload_uses_only_outline_reference_materials() -> None:
@@ -1198,3 +1199,36 @@ def test_chapter_draft_payload_uses_only_template_reference_segments() -> None:
         }
     ]
     assert "大纲片段" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_only_system_computed_warnings_reach_the_user() -> None:
+    """模型输出自带的 warnings 是自述、未经核实：不展示。
+
+    2026-09-30 页面上出现过模型写的「二级目录共 33 个，符合上限 21 的约束」——实际是 36 个。
+    """
+    client = AdaptiveOutlineProvider(skeleton_branch_count=40)
+    original_run = client.run
+
+    async def run_with_self_reports(
+        operation: str, payload: dict[str, Any], user: str, response_model: type[object]
+    ) -> dict[str, Any]:
+        result = await original_run(operation, payload, user, response_model)
+        if isinstance(result, dict) and operation in {"outline_skeleton_planning", "outline_branch_expansion"}:
+            result["warnings"] = ["模型自述：结构完全符合约束"]
+        return result
+
+    client.run = run_with_self_reports  # type: ignore[method-assign]
+    request = OutlineRequest.model_validate({
+        "requestId": "outline-self-reports-hidden",
+        "title": "80页技术标",
+        "targetPages": 80,
+        "biddingMode": "BLIND",
+        "criteria": [{"id": "overview", "type": "PROJECT_OVERVIEW", "title": "项目概述",
+                      "description": "建设统一技术平台"}],
+    })
+
+    result = asyncio.run(TenderAiService(client).outline_result(request))
+
+    assert not any("模型自述" in warning for warning in result.data.warnings)
+    assert not any("normalized" in warning for warning in result.data.warnings)
+    assert any("二级目录共40个" in warning for warning in result.data.warnings), "系统提示仍在"

@@ -101,7 +101,10 @@ class AdaptiveOutlinePlanner:
             semantic_validator=skeleton_structure_errors,
         )
         # 规模偏差只提示：模型的结构原样保留，由用户判断（直接用、编辑或重新生成）。
-        skeleton.data.warnings.extend(skeleton_scale_warnings(skeleton.data, scale))
+        # 给用户看的提示只放系统算出来的规模偏差。模型输出里自带的 warnings 是它的自述，
+        # 未经核实——2026-09-30 它写「二级 33 个，符合上限 21 的约束」，实际是 36 个；
+        # 规整步骤留下的内部说明（页数占位已归一）也不是用户要判断的事。
+        skeleton.data.warnings[:] = skeleton_scale_warnings(skeleton.data, scale)
         # 分批在**骨架阶段就定下来并发出去**，而不是留给调用方自己切。
         # 调用方各切各的，重跑一批时的分组就可能和上一次不同，
         # 于是「只重跑第 3 批」重跑的其实是另外一批分支。
@@ -264,8 +267,6 @@ class AdaptiveOutlinePlanner:
             cursor += 1
         if difference:
             raise AiProviderOutputError("Target page budget cannot be balanced")
-        if current != target_pages:
-            result.warnings.append("AI page allocation was normalized to the requested total.")
 
 
 def _to_contract(target: OutlineBranchTarget) -> OutlineBranchTargetContract:
