@@ -324,8 +324,10 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
         for (JsonNode result : body.path("results")) {
             String route = result.path("endpointCode").asText("?");
             if (result.path("ok").asBoolean(false)) {
+                // 探测带 thinking=off；Python 侧已核对回显与推理内容，走到这里即已关闭推理。
+                // 应答模型可能是路由的备选模型：Atlas 不在响应里标明主备，这里如实给出模型名。
                 items.add(new Probe(true, true, route + "：模型 " + result.path("modelCode").asText("?")
-                        + " 应答，" + result.path("latencyMs").asText("?") + " ms，"
+                        + " 应答，推理已关闭，" + result.path("latencyMs").asText("?") + " ms，"
                         + result.path("totalTokens").asText("?") + " token"));
             } else {
                 items.add(new Probe(true, false, route + "：" + result.path("code").asText("?")
@@ -335,7 +337,8 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
         long passed = items.stream().filter(Probe::ok).count();
         boolean ok = !items.isEmpty() && passed == items.size();
         return new SpendResult(ok, passed + "/" + items.size()
-                + " 条路由走通；消耗由 Atlas 按 atlas.chat 自行计量上报，本产品不另记", items);
+                + " 条路由走通（请求 thinking=off，核对了 Atlas 的回显）；"
+                + "消耗由 Atlas 按 atlas.chat 自行计量上报，本产品不另记", items);
     }
 
     // ── C3 重放 ────────────────────────────────────────────────────────────

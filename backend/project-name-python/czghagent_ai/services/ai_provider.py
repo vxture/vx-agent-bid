@@ -32,13 +32,18 @@ class AiProviderError(RuntimeError):
         self.elapsed_millis = elapsed_millis
 
     def details(self) -> dict[str, object]:
-        return {
+        detail: dict[str, object] = {
             "code": self.code,
             "message": str(self),
             "stage": self.stage,
             "attempts": self.attempts,
             "elapsedMillis": self.elapsed_millis,
         }
+        # 被调方（Atlas）自己的码。本服务的码是它的归类，排查时要的是原码。
+        atlas_code = getattr(self, "atlas_code", None)
+        if atlas_code:
+            detail["atlasCode"] = atlas_code
+        return detail
 
     def with_context(self, stage: str, elapsed_millis: int) -> "AiProviderError":
         if not self.stage:

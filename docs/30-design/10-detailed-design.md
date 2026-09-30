@@ -597,6 +597,12 @@ HttpOnly cookie 里，浏览器读不到它。
 子类，因为路由未命中的 404 由 Starlette 自己抛；只注册子类会让这一面最常被撞到的响应
 成为唯一漏网的那个。
 
+AI 失败在 X-1 四个字段之外多带一个 `details`：阶段、耗时、尝试次数、finish_reason、token、结构校验错误
+与被调方原码 `atlasCode`，Java 据此落 `bid_ai_run_attempt` 并组织界面提示。它曾经只挂在异常对象上而从不序列化，
+Java 读的又是 FastAPI 旧的 `{"detail": …}`——两头都不报错，结果是每一次 AI 失败都落成
+`AI_PROVIDER_ERROR`「AI 工作流执行失败」，Atlas 拒票后「作废缓存重铸一次」的分支也从未命中过。
+Java 仍兼容读取旧形状。
+
 `X-Vxture-Task-Id` 由 Java 侧透传进来，经中间件放进请求作用域的 `ContextVar`，
 再随出站模型调用带出。为空是合法状态，不在此处兜底成新 UUID。
 
@@ -703,15 +709,34 @@ Python 根据 `AI_MODEL_REQUEST_DIALECT` 转换思考开关：`deepseek` 发送
 **只重一次**——其余失败一概不重试，因为每次调用都被计量，而最值得重试的操作恰好
 都不幂等。
 
-**请求体只有** `{endpointCode, messages, tenantId, taskId, requestId, applicationType, applicationId, featureId}`。
+**请求体**：`{endpointCode, messages, tenantId, taskId, requestId, applicationType, applicationId, featureId,
+thinking, temperature, maxTokens?, timeoutMs}`。
 `applicationType` 固定 `agent`；`featureId` 是 operation 本身——请求体里没有别的维度能说明一笔推理
 花在解读、目录、正文还是审查上。`applicationId` 与 `applicationType` **必须成对**：只送后者时 Atlas 对每一次
 调用答 `400 APPLICATION_ID_REQUIRED`（v0.1.20 因此全部模型调用中断，v0.1.21 修复）；它又必须是 UUID——
 Atlas 授权查询按 UUID 转型。所以取 task_id 的 UUIDv5：同一任务的调用归到同一个 application 下，
-构造上永远是合法 UUID。没有 temperature、
-没有 max_tokens、没有 response_format、没有 thinking 开关——这不是遗漏，Atlas 的路由
-优先级是 `modelCode > endpointCode > taskProfile`，生成参数属于 endpoint 的配置。
-产品这一侧能决定的只有「走哪条路由」。Atlas 2026-09-29 授予本产品十条通用路由
+构造上永远是合法 UUID。
+
+**生成参数按调用传**（Atlas v0.7.8 起，#69）。此前本仓认定「生成参数属于路由配置、请求体不带」，
+而 Atlas 并不给路由设默认温度，推理开关也不按路由区分——`chat/deterministic` 与 `chat/reasoning`
+的主模型是同一个 DeepSeek v4-pro。结果是解读环节以上游默认（开推理）跑了一段：2026-09-29 平均每次
+输出 4137 token，其中 78% 是推理，p95 延迟 94 秒。取值沿用 §8.1 直连时代实测的策略，与直连 provider
+读同一份函数，不另抄一张表：
+
+- `thinking`：走 `chat/reasoning` 的三个 operation 为 `"on"`，其余一律 `"off"`（`atlas_endpoints.thinking_for`）。
+  不传即上游默认，而默认通常是开。
+- `temperature`：§8.1 的温度列；`maxTokens`：§8.1 中有显式上限的 operation 才送。
+- `timeoutMs`：`ATLAS_TIMEOUT_SECONDS` 减 2 秒。超时由 Atlas 执行——取消上游、停止计费、答
+  `504 DEADLINE_EXCEEDED`。不带它时，我们到读超时断开并重试，而 Atlas 仍让上游生成计费。
+
+**Atlas 的拒绝码**（全部不可重试）：`PAYLOAD_TOO_LARGE` / `CONTEXT_LENGTH_EXCEEDED` /
+`UPSTREAM_REJECTED_REQUEST` 收成 `AI_INPUT_TOO_LARGE`（输入太大，需要分片）；
+`OUTPUT_BUDGET_EXHAUSTED` 为 `AI_OUTPUT_BUDGET_EXHAUSTED`（输出预算在给出结果前被推理用完）；
+`DEADLINE_EXCEEDED` 归入 `AI_MODEL_TIMEOUT`。Atlas 原码随 `details.atlasCode` 带回 Java，进入失败记录与界面提示。
+请求体上限 16 MiB，路由容量（`contextWindow` / `maxOutputTokens` / `maxRequestBytes`）见
+`GET /v1/model-routes`。
+
+产品这一侧决定「走哪条路由」与上面这几个参数；路由挂哪个模型仍由运营决定。Atlas 2026-09-29 授予本产品十条通用路由
 （`chat/default` · `chat/deterministic` · `chat/extract` · `chat/fast` · `chat/reasoning` · `chat/vision` ·
 `embedding/default` · `embedding/quality` · `rerank/default` · `rerank/quality`，即
 `AUTHORIZED_ENDPOINT_CODES`），本产品只路由其中四条 chat；其余六条授权在手而没有调用点——

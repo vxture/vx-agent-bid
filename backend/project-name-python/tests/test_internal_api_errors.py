@@ -270,7 +270,12 @@ def test_a_model_failure_leaves_the_service_in_the_platform_envelope(monkeypatch
     )
 
     assert response.status_code == 504
-    assert response.json() == {"code": "AI_MODEL_TIMEOUT", "message": "AI model stage timed out", "retryable": True}
+    body = response.json()
+    assert {key: body[key] for key in ("code", "message", "retryable")} == {
+        "code": "AI_MODEL_TIMEOUT", "message": "AI model stage timed out", "retryable": True,
+    }
+    # X-1 之外只多一个 details，给 Java 落诊断；不出现 FastAPI 的 {"detail": …}。
+    assert set(body) == {"code", "message", "retryable", "details"}
 
 
 # ── 解析与成稿 ─────────────────────────────────────────────────────────────
@@ -390,3 +395,29 @@ def test_probes_say_plainly_when_the_process_is_not_on_atlas(monkeypatch: pytest
         asyncio.run(internal.list_atlas_models())
 
     assert (caught.value.status, caught.value.code) == (503, "AI_ATLAS_NOT_CONFIGURED")
+
+
+def test_a_model_failure_carries_its_diagnostics_in_the_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Java 把这些诊断落进 bid_ai_run_attempt。
+
+    它们曾经只挂在异常对象上而从不序列化——每一次 AI 失败到了 Java 都只剩
+    「AI 工作流执行失败」，2026-09-29 的请求体超限要读 Atlas 进程日志才定位出来。
+    """
+    failure = AiProviderTimeoutError("AI model stage timed out", stage="chapter_drafting", attempts=2)
+    failure.atlas_code = "DEADLINE_EXCEEDED"  # type: ignore[attr-defined]
+    monkeypatch.setattr(internal, "tender_ai_service", _FailingService(failure))
+
+    response = TestClient(app).post(
+        "/internal/tender/outline/strategy",
+        headers={"X-Internal-Token": settings.internal_token},
+        json={
+            "requestId": "errors", "title": "失败路径技术标", "targetPages": 20, "biddingMode": "BLIND",
+            "criteria": [{"id": "c1", "type": "PROJECT_OVERVIEW", "title": "概述", "description": "建设统一技术平台"}],
+        },
+    )
+
+    body = response.json()
+    assert body["code"] == "AI_MODEL_TIMEOUT"
+    assert body["details"]["stage"] == "chapter_drafting"
+    assert body["details"]["atlasCode"] == "DEADLINE_EXCEEDED"
+    assert body["details"]["attempts"] == 2
