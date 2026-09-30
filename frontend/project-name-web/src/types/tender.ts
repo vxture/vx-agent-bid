@@ -144,6 +144,8 @@ export type BidOutlineTask = {
   createdAt: string
   startedAt: string | null
   finishedAt: string | null
+  /** 目录生成的提示（规模偏差、略去的空章节）。只提示，不代表失败。 */
+  warnings: string[]
 }
 
 export type BidFrozenFact = {

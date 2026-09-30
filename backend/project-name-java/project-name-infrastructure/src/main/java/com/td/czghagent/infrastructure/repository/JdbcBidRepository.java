@@ -222,10 +222,10 @@ public class JdbcBidRepository implements BidRepository {
     @Override
     @Transactional
     public boolean completeOutlineTask(String taskId, String bidId,
-                                       List<BidWorkspace.OutlineNode> nodes) {
+                                       List<BidWorkspace.OutlineNode> nodes, List<String> warnings) {
         drafts.replaceGeneratedOutline(bidId, nodes);
         productionRepository.markOutlineReview(bidId, "The generated outline is ready for review");
-        if (!tasks.completeOutlineTask(taskId)) {
+        if (!tasks.completeOutlineTask(taskId, warnings)) {
             throw new IllegalStateException("The outline task stopped before its result was committed");
         }
         return true;

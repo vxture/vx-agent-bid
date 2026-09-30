@@ -62,12 +62,15 @@ final class JdbcBidTaskExportPersistence {
                 """, stage, progress, taskId) == 1;
     }
 
-    boolean completeOutlineTask(String taskId) {
+    boolean completeOutlineTask(String taskId, List<String> warnings) {
+        String warningsJson = warnings == null || warnings.isEmpty()
+                ? null : BidJdbcMappers.writeJson(warnings);
         return jdbcTemplate.update("""
                 UPDATE bid_outline_task SET status = 'SUCCEEDED', stage = 'COMPLETE',
-                    progress = 100, error_message = NULL, finished_at = CURRENT_TIMESTAMP
+                    progress = 100, error_message = NULL, warnings_json = ?,
+                    finished_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status IN ('PENDING', 'RUNNING')
-                """, taskId) == 1;
+                """, warningsJson, taskId) == 1;
     }
 
     boolean failOutlineTask(String taskId, String bidId, String errorMessage) {
@@ -390,7 +393,8 @@ final class JdbcBidTaskExportPersistence {
                 rs.getString("workflow_run_id"),
                 rs.getString("error_message"), JdbcTimes.localDateTime(rs, "created_at"),
                 BidJdbcMappers.nullableTime(rs, "started_at"),
-                BidJdbcMappers.nullableTime(rs, "finished_at")), bidId)
+                BidJdbcMappers.nullableTime(rs, "finished_at"),
+                BidJdbcMappers.parseStringList(rs.getString("warnings_json"))), bidId)
                 .stream().findFirst().orElse(null);
     }
 

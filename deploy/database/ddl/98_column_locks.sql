@@ -92,7 +92,8 @@ REVOKE UPDATE ON bid.bid_generation_event FROM tenderforge_svc;
 REVOKE UPDATE ON bid.bid_outline_regeneration_archive FROM tenderforge_svc;
 -- bid_outline_regeneration_archive: 代码里没有任何 UPDATE —— 追加型，不给 UPDATE。
 REVOKE UPDATE ON bid.bid_outline_task FROM tenderforge_svc;
-GRANT UPDATE (error_message, finished_at, progress, stage, started_at, status, workflow_run_id)
+GRANT UPDATE (error_message, finished_at, progress, stage, started_at, status, warnings_json,
+  workflow_run_id)
   ON bid.bid_outline_task TO tenderforge_svc;
 REVOKE UPDATE ON bid.bid_outline_stage_result FROM tenderforge_svc;
 GRANT UPDATE (attempt_count, duration_ms, error_code, error_message, finished_at, input_hash, model_name, output_hash, output_payload, started_at, status)
