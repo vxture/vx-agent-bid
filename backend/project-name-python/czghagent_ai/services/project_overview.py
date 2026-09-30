@@ -90,7 +90,7 @@ class ProjectOverviewExtractor:
         response = ProjectOverviewResponse(project_overview=_render_markdown(draft.data))
         return AiStructuredResult(
             data=response,
-            diagnostics=_merge_diagnostics(selection_diagnostics, draft.diagnostics),
+            diagnostics=merge_diagnostics(selection_diagnostics, draft.diagnostics),
             attempts=selection_attempts + draft.attempts,
         )
 
@@ -143,7 +143,7 @@ class ProjectOverviewExtractor:
         )
         diagnostics = results[0].diagnostics
         for result in results[1:]:
-            diagnostics = _merge_diagnostics(diagnostics, result.diagnostics)
+            diagnostics = merge_diagnostics(diagnostics, result.diagnostics)
         attempts = sum(result.attempts for result in results)
         if not merged:
             raise AiStructuredOutputError(
@@ -338,7 +338,7 @@ def _render_markdown(draft: ProjectOverviewDraft) -> str:
     return "\n\n".join(sections)
 
 
-def _merge_diagnostics(
+def merge_diagnostics(
     selection: AiProviderDiagnostics, composition: AiProviderDiagnostics
 ) -> AiProviderDiagnostics:
     return AiProviderDiagnostics(

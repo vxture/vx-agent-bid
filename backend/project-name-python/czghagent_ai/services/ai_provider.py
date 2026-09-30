@@ -671,6 +671,10 @@ def _operation_prompt(operation: str) -> str:
             "核心区物理隔离与隔离区外经前置代理受控访问互联网可以同时成立。"
             "只有正文明确让同一核心安全域直接连接互联网，或没有交代安全域与受控边界时，"
             "才可判定为阻断级矛盾，并应指定可修订的chapterId和明确的统一口径。"
+            "若input.batch存在，说明标书较长、按章节分成input.batch.total批审查，本次是第"
+            "input.batch.index批：只对input.chapters中给出正文的章节提出问题，chapterId必须"
+            "来自input.chapters；input.chapterIndex列出全书各章的标题与摘要，用于判断跨章节"
+            "一致性与评分点覆盖，不要对未给出正文的章节下结论。"
         ),
     }
     return shared + instructions.get(operation, "完成指定技术标任务。")

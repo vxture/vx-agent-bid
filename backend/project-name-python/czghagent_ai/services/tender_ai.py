@@ -12,7 +12,7 @@ from typing import Any
 from czghagent_ai.services.ai_provider import AiProviderDiagnostics, TenderAiProvider
 from czghagent_ai.services.body_format import normalize_body_html, normalize_body_numbering_text
 from czghagent_ai.services.outline_planner import AdaptiveOutlinePlanner
-from czghagent_ai.services.project_overview import ProjectOverviewExtractor
+from czghagent_ai.services.project_overview import ProjectOverviewExtractor, merge_diagnostics
 from czghagent_ai.services.structured_output import (
     AiStructuredExecutor,
     AiStructuredOutputError,
@@ -42,6 +42,7 @@ from czghagent_ai.tender_models import (
     OutlineSkeletonPlan,
     OutlineSkeletonStageRequest,
     ProjectOverviewResponse,
+    ReviewCoverage,
     ReviewRequest,
     ReviewResponse,
     RevisionContentResponse,
@@ -603,14 +604,135 @@ class TenderAiService:
     async def review_result(
         self, request: ReviewRequest
     ) -> AiStructuredResult[ReviewResponse]:
-        return await self._executor.execute_result(
-            "consistency_review",
-            request.payload,
-            f"{request.request_id}-review",
-            ReviewResponse,
-            object_name="成稿审查结果",
-            schema_version="review-v2",
+        batches = review_batches(request.payload, _REVIEW_BATCH_CHARACTERS)
+        if len(batches) == 1:
+            return await self._executor.execute_result(
+                "consistency_review",
+                request.payload,
+                f"{request.request_id}-review",
+                ReviewResponse,
+                object_name="成稿审查结果",
+                schema_version="review-v2",
+            )
+        gate = asyncio.Semaphore(_REVIEW_CONCURRENCY)
+
+        async def review_batch(
+            number: int, payload: dict[str, object]
+        ) -> AiStructuredResult[ReviewResponse]:
+            async with gate:
+                return await self._executor.execute_result(
+                    "consistency_review",
+                    payload,
+                    f"{request.request_id}-review-b{number}",
+                    ReviewResponse,
+                    object_name=f"成稿审查结果（第{number}/{len(batches)}批）",
+                    schema_version="review-v2",
+                )
+
+        results = await asyncio.gather(
+            *(review_batch(number, payload) for number, payload in enumerate(batches, 1))
         )
+        diagnostics = results[0].diagnostics
+        for result in results[1:]:
+            diagnostics = merge_diagnostics(diagnostics, result.diagnostics)
+        return AiStructuredResult(
+            merge_reviews([result.data for result in results]),
+            diagnostics,
+            sum(result.attempts for result in results),
+        )
+
+#: 一次审查最多送入多少字符的章节正文。
+#:
+#: 审查把每章摘录（≤ 16,000 字）一起送入，输入随标书规模线性增长：200 页的标书约 0.6 MB，
+#: 500 页约 1.5 MB，而 ``chat/reasoning`` 的窗口是 256K token（联络函 40、Atlas #69）。
+#: 超过这个量就按章节分批；常规规模的标书仍是一次调用，行为不变。
+_REVIEW_BATCH_CHARACTERS = 60_000
+
+#: 同时在途的审查批次。审查走推理路由，单次耗时长；并行只为缩短墙钟时间，不求压满路由。
+_REVIEW_CONCURRENCY = 2
+
+
+def _chapter_size(chapter: object) -> int:
+    if not isinstance(chapter, dict):
+        return 0
+    return sum(len(value) for value in chapter.values() if isinstance(value, str))
+
+
+def review_batches(payload: dict[str, object], budget: int) -> list[dict[str, object]]:
+    """把审查请求按章节切成若干批；放得下时原样返回一个。
+
+    每批带齐共享上下文（写作规范、术语与承诺登记、评分要求）与<b>全书目录</b>
+    （每章 id、标题与已有的摘要），只把本批章节的正文放进 ``chapters``——跨章一致性
+    靠目录与摘要判断，而正文级的问题只针对本批章节提出。章节不拆开，按原文顺序装批；
+    单章超过预算时独占一批。
+    """
+    chapters = payload.get("chapters")
+    if not isinstance(chapters, list) or sum(_chapter_size(item) for item in chapters) <= budget:
+        return [payload]
+    groups: list[list[object]] = [[]]
+    size = 0
+    for chapter in chapters:
+        chapter_size = _chapter_size(chapter)
+        if groups[-1] and size + chapter_size > budget:
+            groups.append([])
+            size = 0
+        groups[-1].append(chapter)
+        size += chapter_size
+    index = [
+        {
+            key: chapter[key]
+            for key in ("chapterId", "title", "summary")
+            if key in chapter
+        }
+        for chapter in chapters
+        if isinstance(chapter, dict)
+    ]
+    shared = {key: value for key, value in payload.items() if key != "chapters"}
+    return [
+        {
+            **shared,
+            "chapters": group,
+            "chapterIndex": index,
+            "batch": {"index": number, "total": len(groups)},
+        }
+        for number, group in enumerate(groups, 1)
+    ]
+
+
+def merge_reviews(reviews: list[ReviewResponse]) -> ReviewResponse:
+    """合并分批审查的结论。
+
+    问题逐条合并、按（严重度、码、章节、描述）去重。评分点覆盖在<b>全书</b>尺度上判断：
+    某批看不到覆盖它的章节，不等于全书没覆盖——所以一个评分点只有在<b>每一批</b>都报缺失时
+    才算缺失。任一批不通过即整体不通过。
+    """
+    seen: set[tuple[str, str, str, str]] = set()
+    issues = []
+    for review in reviews:
+        for issue in review.issues:
+            key = (issue.severity, issue.code, issue.chapter_id, issue.message)
+            if key not in seen:
+                seen.add(key)
+                issues.append(issue)
+    total = max((review.coverage.total for review in reviews), default=0)
+    reporting = [review.coverage for review in reviews if review.coverage.total > 0]
+    missing: list[str] = []
+    if reporting:
+        common = set(reporting[0].missing_scoring_point_ids)
+        for coverage in reporting[1:]:
+            common &= set(coverage.missing_scoring_point_ids)
+        missing = [item for item in reporting[0].missing_scoring_point_ids if item in common]
+    warnings = list(dict.fromkeys(item for review in reviews for item in review.warnings))
+    summary = "；".join(review.review_summary for review in reviews if review.review_summary)
+    return ReviewResponse(
+        passed=all(review.passed for review in reviews),
+        issues=issues,
+        coverage=ReviewCoverage(total=total, covered=max(0, total - len(missing)),
+                                missing_scoring_point_ids=missing),
+        warnings=warnings,
+        review_summary=summary[:3000],
+    )
+
 
 def blocks_to_html(blocks: list[ContentBlock]) -> str:
     output: list[str] = []
