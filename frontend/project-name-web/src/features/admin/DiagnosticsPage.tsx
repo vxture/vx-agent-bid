@@ -114,6 +114,7 @@ export default function DiagnosticsPage() {
             >
               <div className="grid grid-cols-1 gap-md md:grid-cols-2">
                 <ProbeCard title="带票读取模型清单" probe={check.data.atlas} />
+                <ProbeCard title="路由容量与推理模式" probe={check.data.atlasRoutes} />
               </div>
               <div className="mt-md">
                 <SpendingProbeCard

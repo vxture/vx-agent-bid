@@ -109,6 +109,23 @@ OPERATION_ROUTES: dict[str, OperationRoute] = {
 }
 
 
+#: 本产品单次调用最大输入的保守 token 估计，用于核对路由窗口放不放得下。
+#:
+#: 最大的单次输入是概述选段与审查的一个窗口（≤ 60,000 字）加提示词、Schema 与共享上下文。
+#: 按「一字一 token」的上界估算——中文在各家分词下通常更少——再留约 20K 给输出与余量。
+#: 这是核对用的下限，不是出站前的拦截：窗口超限由 Atlas 以 CONTEXT_LENGTH_EXCEEDED 答复，
+#: 网关不预估 token（Atlas #69），产品侧也不去预估。
+REQUIRED_CONTEXT_TOKENS = 80_000
+
+
+def route_requirements() -> dict[str, set[str]]:
+    """每条实际路由上本产品会发出的推理模式。"""
+    modes: dict[str, set[str]] = {}
+    for operation, route in OPERATION_ROUTES.items():
+        modes.setdefault(route.endpoint_code, set()).add(thinking_for(operation))
+    return modes
+
+
 def thinking_for(operation: str) -> str:
     """这次调用开不开推理：走 ``chat/reasoning`` 的开，其余一律关。
 

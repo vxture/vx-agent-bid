@@ -65,7 +65,8 @@ class PlatformDiagnosticsServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        for (String path : List.of("/platform/entitlements", "/internal/atlas/models", "/internal/atlas/probe")) {
+        for (String path : List.of("/platform/entitlements", "/internal/atlas/models", "/internal/atlas/routes",
+                "/internal/atlas/probe")) {
             server.createContext(path, exchange -> {
                 seen.add(exchange.getRequestHeaders());
                 exchange.getRequestBody().readAllBytes();
@@ -160,6 +161,24 @@ class PlatformDiagnosticsServiceTest {
         Headers toAi = seen.stream().filter(h -> h.containsKey("X-vxture-s2s-token")).findFirst().orElseThrow();
         assertThat(toAi.getFirst("X-Vxture-S2S-Token")).isEqualTo("atlas-obo-token");
         assertThat(toAi.getFirst("X-Vxture-Task-Id")).isEqualTo("diag-models-" + WORKSPACE + "-20260929");
+    }
+
+    @Test
+    void aRouteThatCannotHonourOurThinkingModeFailsTheCapacityCheck() {
+        bodies.put("/internal/atlas/routes", """
+                {"maxRequestBytes":16777216,"routes":[
+                  {"endpointCode":"chat/fast","ok":true,"contextWindow":256000,"maxOutputTokens":128000,
+                   "thinkingModes":["off","on"],"problems":[],"unknown":[]},
+                  {"endpointCode":"chat/deterministic","ok":false,
+                   "problems":["不支持推理模式 off（本产品会发出）"],"unknown":[]}
+                ]}
+                """);
+
+        PlatformDiagnostics.PlatformCheck check = asMember(() -> service().check());
+
+        assertThat(check.atlasRoutes().ok()).isFalse();
+        assertThat(check.atlasRoutes().detail())
+                .contains("chat/fast 窗口 256000", "chat/deterministic ✗ 不支持推理模式 off", "16777216");
     }
 
     @Test

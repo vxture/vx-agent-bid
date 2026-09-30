@@ -111,7 +111,8 @@ Compose 项目名是 `tenderforge`（`docker-compose.yml` 顶层 `name:`），�
 `GET /api/admin/platform-check`）每次打开都按业务路径真打一遍：C1 发现文档与 JWKS、按业务原样
 铸两张票（给 Atlas 的 OBO / service 票与给平台面的 service 票）、C2 直读一次权益（不经 45 秒缓存，
 带回平台实际下发的 `Cache-Control`）、C3 上行缓冲积压、C3 下行验签自检与最近投递、带票读 Atlas
-模型清单——全部只读、不产生费用。会花钱的两项各自单独成卡、必须经确认对话框才触发，并记审计
+模型清单，以及带票读 `GET /v1/model-routes` 核对本产品实际使用的四条路由（active、支持本产品会发出的
+推理模式、上下文窗口不小于 80K token）——全部只读、不产生费用。会花钱的两项各自单独成卡、必须经确认对话框才触发，并记审计
 （`PLATFORM_PROBE_ATLAS` / `PLATFORM_PROBE_USAGE_REPLAY`）：Atlas 活体探测对本产品实际使用的
 每条路由各打一次最短调用（补全上限 8 token），C3 重放校验以按日稳定的幂等键上报两次
 `tenderforge.document.exports`，第二次必须答 `replayed:true` 且带回同一个 `event_id`。

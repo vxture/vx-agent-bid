@@ -42,7 +42,12 @@ from czghagent_ai.services.ai_provider import (
     _operation_temperature,
     _text_hash,
 )
-from czghagent_ai.services.atlas_endpoints import endpoint_for, thinking_for
+from czghagent_ai.services.atlas_endpoints import (
+    REQUIRED_CONTEXT_TOKENS,
+    endpoint_for,
+    route_requirements,
+    thinking_for,
+)
 from czghagent_ai.task_context import current_atlas_identity, current_task_id
 
 ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
@@ -371,6 +376,40 @@ class AtlasProvider:
             raise _atlas_error(response, "atlas_models", 1, started)
         return _model_codes(response.json())
 
+    async def route_capacity(self) -> dict[str, Any]:
+        """带票读 ``GET /v1/model-routes``，并逐条核对本产品实际使用的路由。不计量。
+
+        三项核对，任一不满足即该路由不通过：
+
+        - ``state`` 为 ``active``；
+        - ``thinkingModes`` 包含本产品在这条路由上会发出的每一种模式——不支持时 Atlas 以
+          ``422 THINKING_MODE_UNSUPPORTED`` 拒绝这条路由上的<b>每一次</b>调用，运营改指向时
+          最可能悄悄打破的就是这一条；
+        - ``contextWindow`` 不小于 :data:`REQUIRED_CONTEXT_TOKENS`。
+
+        ``null`` 表示 Atlas 也不知道（#69），如实标为「未知」而不是「通过」。
+        """
+        self.validate_configuration()
+        token, _ = current_atlas_identity()
+        if not token:
+            raise AiProviderNotConfiguredError(
+                "本次请求没有携带 Atlas S2S 票；票由 Java 侧现铸并转呈", stage="atlas_routes"
+            )
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                response = await client.get(
+                    f"{self._base_url}/v1/model-routes",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                )
+        except httpx.HTTPError as exception:
+            raise AiProviderError(
+                "Atlas 不可达", stage="atlas_routes", elapsed_millis=_elapsed_millis(started)
+            ) from exception
+        if response.status_code >= 400:
+            raise _atlas_error(response, "atlas_routes", 1, started)
+        return _evaluate_routes(response.json())
+
     async def probe(self, endpoint_code: str) -> dict[str, Any]:
         """对一条路由发一次最短的真实调用。<b>会花钱</b>，由 Atlas 自行计量上报。
 
@@ -481,6 +520,50 @@ def _attribution(feature_id: str, task_id: str) -> dict[str, str]:
         "applicationId": str(uuid.uuid5(_APPLICATION_NAMESPACE, task_id)),
         "featureId": feature_id,
     }
+
+
+def _evaluate_routes(body: Any) -> dict[str, Any]:
+    listed: dict[str, dict[str, Any]] = {}
+    if isinstance(body, dict):
+        for item in body.get("endpoints") or []:
+            if isinstance(item, dict) and isinstance(item.get("endpointCode"), str):
+                listed[item["endpointCode"]] = item
+    routes: list[dict[str, Any]] = []
+    for code, modes in sorted(route_requirements().items()):
+        item = listed.get(code)
+        if item is None:
+            routes.append({"endpointCode": code, "ok": False, "problems": ["路由列表里没有这条路由"]})
+            continue
+        problems: list[str] = []
+        unknown: list[str] = []
+        if item.get("state") != "active":
+            problems.append(f"state={item.get('state')!r}")
+        supported = item.get("thinkingModes")
+        if isinstance(supported, list):
+            missing = sorted(modes - {str(mode) for mode in supported})
+            if missing:
+                problems.append(f"不支持推理模式 {', '.join(missing)}（本产品会发出）")
+        else:
+            unknown.append("thinkingModes")
+        window = item.get("contextWindow")
+        if isinstance(window, int):
+            if window < REQUIRED_CONTEXT_TOKENS:
+                problems.append(f"上下文窗口 {window} < 所需 {REQUIRED_CONTEXT_TOKENS}")
+        else:
+            unknown.append("contextWindow")
+        routes.append({
+            "endpointCode": code,
+            "ok": not problems,
+            "state": item.get("state"),
+            "contextWindow": window,
+            "maxOutputTokens": item.get("maxOutputTokens"),
+            "thinkingModes": supported,
+            "requiredThinking": sorted(modes),
+            "problems": problems,
+            "unknown": unknown,
+        })
+    max_bytes = body.get("maxRequestBytes") if isinstance(body, dict) else None
+    return {"maxRequestBytes": max_bytes, "routes": routes}
 
 
 def _model_codes(body: Any) -> list[str]:
