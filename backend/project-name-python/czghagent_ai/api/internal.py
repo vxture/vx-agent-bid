@@ -513,6 +513,15 @@ async def list_atlas_models() -> dict[str, object]:
     return {"count": len(codes), "models": codes}
 
 
+@router.get("/atlas/routes", dependencies=[Depends(require_internal_token)])
+async def atlas_route_capacity() -> dict[str, object]:
+    """带票读 Atlas 路由容量，逐条核对本产品实际使用的路由。不计量。"""
+    try:
+        return await _atlas_exit().route_capacity()
+    except AiProviderError as exception:
+        raise map_ai_error(exception) from exception
+
+
 @router.post("/atlas/probe", dependencies=[Depends(require_internal_token)])
 async def probe_atlas(body: AtlasProbeRequest) -> dict[str, object]:
     """对每条路由各发一次最短的真实调用。<b>会花钱</b>，由 Atlas 自行计量。

@@ -676,3 +676,78 @@ def test_an_atlas_deadline_is_a_timeout_that_is_not_retried_locally(caller: None
 
     assert caught.value.code == "AI_MODEL_TIMEOUT"
     assert len(seen) == 1
+
+
+# ── 路由容量核对（GET /v1/model-routes，Atlas v0.7.7 起） ────────────────
+
+
+def _routes(**overrides: dict[str, Any]) -> dict[str, Any]:
+    base = {
+        code: {
+            "endpointCode": code, "category": "chat", "state": "active",
+            "contextWindow": 256000, "maxOutputTokens": 128000, "thinkingModes": ["off", "on"],
+        }
+        for code in ("chat/default", "chat/deterministic", "chat/fast", "chat/reasoning", "chat/vision")
+    }
+    for code, change in overrides.items():
+        base[code.replace("_", "/")].update(change)
+    return {"endpoints": list(base.values()), "maxRequestBytes": 16_777_216}
+
+
+def test_route_capacity_is_read_with_the_same_ticket_and_checks_only_our_routes(caller: None) -> None:
+    provider, seen = _provider(_answers(_routes()))
+
+    result = asyncio.run(provider.route_capacity())
+
+    assert seen[0].url.path == "/v1/model-routes"
+    assert seen[0].headers["authorization"] == "Bearer minted.jwt.value"
+    assert result["maxRequestBytes"] == 16_777_216
+    assert [route["endpointCode"] for route in result["routes"]] == [
+        "chat/default", "chat/deterministic", "chat/fast", "chat/reasoning",
+    ], "只核对本产品实际路由的四条，不包括授权在手而未使用的 chat/vision"
+    assert all(route["ok"] for route in result["routes"])
+    reasoning = next(route for route in result["routes"] if route["endpointCode"] == "chat/reasoning")
+    assert reasoning["requiredThinking"] == ["on"]
+    deterministic = next(route for route in result["routes"] if route["endpointCode"] == "chat/deterministic")
+    assert deterministic["requiredThinking"] == ["off"]
+
+
+def test_a_route_that_cannot_turn_reasoning_off_fails_the_check(caller: None) -> None:
+    """运营改指向到只支持 on 的模型：这条路由上的每一次调用都会 422 THINKING_MODE_UNSUPPORTED。"""
+    provider, _ = _provider(_answers(_routes(chat_deterministic={"thinkingModes": ["on"]})))
+
+    result = asyncio.run(provider.route_capacity())
+
+    route = next(item for item in result["routes"] if item["endpointCode"] == "chat/deterministic")
+    assert route["ok"] is False
+    assert "off" in route["problems"][0]
+
+
+def test_a_window_too_small_for_our_largest_input_fails_the_check(caller: None) -> None:
+    provider, _ = _provider(_answers(_routes(chat_fast={"contextWindow": 32_000})))
+
+    result = asyncio.run(provider.route_capacity())
+
+    route = next(item for item in result["routes"] if item["endpointCode"] == "chat/fast")
+    assert route["ok"] is False
+    assert "32000" in route["problems"][0]
+
+
+def test_unknown_capacity_is_reported_as_unknown_not_as_passing(caller: None) -> None:
+    provider, _ = _provider(_answers(_routes(chat_default={"contextWindow": None, "thinkingModes": None})))
+
+    result = asyncio.run(provider.route_capacity())
+
+    route = next(item for item in result["routes"] if item["endpointCode"] == "chat/default")
+    assert route["unknown"] == ["thinkingModes", "contextWindow"]
+
+
+def test_a_route_missing_from_the_list_fails(caller: None) -> None:
+    body = _routes()
+    body["endpoints"] = [item for item in body["endpoints"] if item["endpointCode"] != "chat/fast"]
+    provider, _ = _provider(_answers(body))
+
+    result = asyncio.run(provider.route_capacity())
+
+    route = next(item for item in result["routes"] if item["endpointCode"] == "chat/fast")
+    assert route["ok"] is False

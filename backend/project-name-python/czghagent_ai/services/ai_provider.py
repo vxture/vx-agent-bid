@@ -588,6 +588,9 @@ def _operation_prompt(operation: str) -> str:
             "信息最完整的一处，连续表格需保留必要的相邻片段。按信息重要性返回10至120个最有信息量的"
             "id，确有必要时可少于10个或增加到160个，但160是绝对上限；不得返回不存在的id，不得返回"
             "任何正文或解释。"
+            "若input.window存在，说明招标文件过长、已按原文顺序切成input.window.total段，"
+            "本次只给出其中第input.window.index段：只从本段片段中选择；本段若全是目录、程序、"
+            "资格、商务、评分或格式内容，返回空数组，不要为凑数硬选。"
         ),
         "project_overview_extraction": (
             "input.selectedSegments是从完整招标文件中筛选出的项目概述源证据。只返回sections数组，"
@@ -668,6 +671,10 @@ def _operation_prompt(operation: str) -> str:
             "核心区物理隔离与隔离区外经前置代理受控访问互联网可以同时成立。"
             "只有正文明确让同一核心安全域直接连接互联网，或没有交代安全域与受控边界时，"
             "才可判定为阻断级矛盾，并应指定可修订的chapterId和明确的统一口径。"
+            "若input.batch存在，说明标书较长、按章节分成input.batch.total批审查，本次是第"
+            "input.batch.index批：只对input.chapters中给出正文的章节提出问题，chapterId必须"
+            "来自input.chapters；input.chapterIndex列出全书各章的标题与摘要，用于判断跨章节"
+            "一致性与评分点覆盖，不要对未给出正文的章节下结论。"
         ),
     }
     return shared + instructions.get(operation, "完成指定技术标任务。")

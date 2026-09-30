@@ -54,6 +54,16 @@ class ProjectOverviewSourceSelection(ApiModel):
     ordered_segment_ids: list[str] = Field(min_length=1, max_length=160)
 
 
+class ProjectOverviewWindowSelection(ApiModel):
+    """分窗口选段时单个窗口的答案。
+
+    与整份文件一次选段的区别只有下限：一个窗口可能整段都是评分办法或投标格式，
+    此时正确答案是空数组。沿用 ``min_length=1`` 会逼模型在不相关的段落里硬挑一个。
+    """
+
+    ordered_segment_ids: list[str] = Field(max_length=160)
+
+
 class ProjectOverviewSection(ApiModel):
     title: str = Field(min_length=1, max_length=80)
     content: str = Field(min_length=1, max_length=6000)

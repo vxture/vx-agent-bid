@@ -65,6 +65,8 @@ export interface PlatformCheck {
   c3Up: PlatformProbe
   c3Down: PlatformProbe
   atlas: PlatformProbe
+  /** 本产品实际路由的容量与推理模式核对（`GET /v1/model-routes`）。 */
+  atlasRoutes: PlatformProbe
   usageReplay: PlatformProbe
 }
 

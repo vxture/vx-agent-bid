@@ -133,7 +133,7 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
     public PlatformCheck check() {
         return new PlatformCheck(
                 LocalDateTime.now(clock).toString(),
-                c1(), tokenMint(), c2(), c3Up(), c3Down(), atlasModels(),
+                c1(), tokenMint(), c2(), c3Up(), c3Down(), atlasModels(), atlasRoutes(),
                 new Probe(!platformApiUrl.isBlank() && !usageConsumeClient.isMock(), false,
                         "只读探测不跑这一项：点「运行重放校验」会把同一个幂等键上报两次，"
                                 + "期望第二次答 replayed:true 且带回第一次的 event_id；"
@@ -301,6 +301,49 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
         } catch (RuntimeException exception) {
             return failed("Atlas " + atlasApiUrl + " 带票读模型清单", exception);
         }
+    }
+
+    /**
+     * 路由容量与推理模式：本产品实际使用的每条路由是否 active、是否支持我们会发出的推理模式、
+     * 窗口是否放得下最大的单次输入。运营改路由指向时，最可能悄悄打破的是推理模式——
+     * 不支持时那条路由上的每一次调用都是 {@code 422 THINKING_MODE_UNSUPPORTED}。
+     */
+    private Probe atlasRoutes() {
+        if (atlasApiUrl.isBlank()) {
+            return Probe.notConfigured("ATLAS_API_URL");
+        }
+        try {
+            S2SToken token = atlasCredentials.mintOrExplain();
+            JsonNode body = TaskContext.run(taskId("diag-routes"), () -> aiService.atlasRoutes(token));
+            List<String> lines = new ArrayList<>();
+            boolean ok = true;
+            for (JsonNode route : body.path("routes")) {
+                boolean routeOk = route.path("ok").asBoolean(false);
+                ok &= routeOk;
+                StringBuilder line = new StringBuilder(route.path("endpointCode").asText("?"));
+                if (routeOk) {
+                    line.append(" 窗口 ").append(route.path("contextWindow").asText("未知"))
+                            .append(" / 输出 ").append(route.path("maxOutputTokens").asText("未知"))
+                            .append("，推理模式 ").append(route.path("thinkingModes").toString());
+                } else {
+                    line.append(" ✗ ").append(joinTexts(route.path("problems")));
+                }
+                if (route.path("unknown").size() > 0) {
+                    line.append("（Atlas 未公布：").append(joinTexts(route.path("unknown"))).append("）");
+                }
+                lines.add(line.toString());
+            }
+            return new Probe(true, ok && !lines.isEmpty(), String.join("；", lines)
+                    + "；请求体上限 " + body.path("maxRequestBytes").asText("未知") + " 字节");
+        } catch (RuntimeException exception) {
+            return failed("Atlas 路由容量", exception);
+        }
+    }
+
+    private static String joinTexts(JsonNode array) {
+        List<String> values = new ArrayList<>();
+        array.forEach(item -> values.add(item.asText()));
+        return String.join("、", values);
     }
 
     @Override
