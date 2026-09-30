@@ -11,6 +11,8 @@ from czghagent_ai.services.outline_strategy import (
     build_outline_scale,
     normalize_skeleton,
     normalize_skeleton_pages,
+    skeleton_scale_warnings,
+    skeleton_structure_errors,
 )
 from czghagent_ai.services.structured_output import AiStructuredOutputError
 from czghagent_ai.services.tender_ai import (
@@ -27,6 +29,7 @@ from czghagent_ai.tender_models import (
     OutlineAssemblyRequest,
     OutlineExpansionStageRequest,
     OutlineRequest,
+    OutlineSkeletonResponse,
     OutlineSkeletonStageRequest,
 )
 
@@ -200,6 +203,7 @@ class AdaptiveOutlineProvider:
             for branch_index, branch in enumerate(payload["branches"]):
                 if (
                     self.omit_last_branch_per_batch
+                    and len(payload["branches"]) > 1
                     and branch_index == len(payload["branches"]) - 1
                 ):
                     continue
@@ -249,30 +253,48 @@ def test_skeleton_page_budgets_are_system_owned() -> None:
     assert raw["warnings"]
 
 
-def test_skeleton_branch_count_is_capped_without_dropping_roots() -> None:
+def test_an_oversized_skeleton_is_kept_as_is_and_the_user_is_told() -> None:
+    """超出上限的骨架不裁、不拒、不让模型重来：原样保留，并给出可操作的提示。
+
+    这里曾经把「超额」的二级目录公平裁掉，裁不下去时整份目录直接失败——
+    2026-09-30 一份 100 页的标书就这样失败，页面上什么目录都没有。
+    """
     raw = AdaptiveOutlineProvider(skeleton_branch_count=40)
-    request_payload = {
-        "outlineScale": build_outline_scale(80, "", "").payload(),
-    }
-    skeleton = asyncio.run(raw.run(
-        "outline_skeleton_planning", request_payload, "test", object
-    ))
     scale = build_outline_scale(80, "", "")
+    skeleton = asyncio.run(raw.run(
+        "outline_skeleton_planning", {"outlineScale": scale.payload()}, "test", object
+    ))
 
     normalize_skeleton(skeleton, scale)
+    response = OutlineSkeletonResponse.model_validate(skeleton)
 
-    roots = [node for node in skeleton["nodes"] if node["level"] == 1]
-    branches = [node for node in skeleton["nodes"] if node["level"] == 2]
-    counts = {
-        root["nodeKey"]: sum(
-            node["parentKey"] == root["nodeKey"] for node in branches
-        )
-        for root in roots
-    }
-    assert len(roots) == 7
-    assert len(branches) == 14
-    assert min(counts.values()) >= 2
-    assert any("公平裁剪" in warning for warning in skeleton["warnings"])
+    assert sum(node.level == 2 for node in response.nodes) == 40, "模型的结构原样保留"
+    assert skeleton_structure_errors(response) == []
+    warnings = skeleton_scale_warnings(response, scale)
+    assert any(f"多于按篇幅估算的上限{scale.level_two_cap}个" in item for item in warnings)
+    assert any("可直接使用" in item for item in warnings)
+
+
+def test_the_cap_the_model_is_told_is_the_cap_the_warning_uses() -> None:
+    """提示词和提示必须是同一个数：此前告诉模型 29，校验却卡在 21。"""
+    scale = build_outline_scale(100, "", "")
+    at_cap = OutlineSkeletonResponse.model_validate({"nodes": [
+        {"nodeKey": "r", "parentKey": None, "level": 1, "title": "一", "plannedPages": 100},
+        *[
+            {"nodeKey": f"b{i}", "parentKey": "r", "level": 2, "title": f"二{i}",
+             "plannedPages": 0, "taskBrief": "简述"}
+            for i in range(scale.level_two_cap)
+        ],
+    ]})
+    over = OutlineSkeletonResponse.model_validate({
+        "nodes": [*at_cap.model_dump(by_alias=True)["nodes"],
+                  {"nodeKey": "extra", "parentKey": "r", "level": 2, "title": "多一个",
+                   "plannedPages": 0, "taskBrief": "简述"}],
+    })
+
+    assert scale.payload()["maxLevelTwoChapters"] == scale.level_two_cap
+    assert skeleton_scale_warnings(at_cap, scale) == []
+    assert skeleton_scale_warnings(over, scale)
 
 
 def test_chapter_draft_rejects_content_that_remains_too_short_after_repair() -> None:
@@ -588,20 +610,21 @@ def test_outline_payload_uses_only_outline_reference_materials() -> None:
         "preferredLevelThreeChildrenPerLevelTwo": {"min": 3, "max": 5},
         "targetLeafChapters": {"min": 12, "ideal": 12, "max": 14},
         "targetLevelTwoChapters": {"min": 3, "max": 4},
-        "maxLevelTwoChapters": 8,
+        "maxLevelTwoChapters": 6,
         "maxLeafChapters": 16,
         "generationMode": "PHASED_QUOTA",
     }
     assert "范本内容" not in json.dumps(payload, ensure_ascii=False)
 
 
-def test_medium_outline_uses_exact_quota_and_trims_model_surplus() -> None:
+def test_a_model_that_writes_more_than_planned_keeps_its_outline_with_a_warning() -> None:
+    """模型多写了三级小节：保留、展示、提示，而不是裁掉或让整份目录失败。"""
     client = AdaptiveOutlineProvider(
         surplus_leaves_per_branch=3,
         skeleton_branch_count=40,
     )
     request = OutlineRequest.model_validate({
-        "requestId": "outline-quota-regression",
+        "requestId": "outline-surplus-kept",
         "title": "80页技术标",
         "targetPages": 80,
         "biddingMode": "BLIND",
@@ -616,22 +639,23 @@ def test_medium_outline_uses_exact_quota_and_trims_model_surplus() -> None:
     result = asyncio.run(TenderAiService(client).outline_result(request))
 
     leaves = [node for node in result.data.nodes if node.level == 3]
-    assert len(leaves) == 31
-    assert any("按系统配额裁剪" in warning for warning in result.data.warnings)
-    assert any("公平裁剪" in warning for warning in result.data.warnings)
-    assert all(call[0] != "outline_planning" for call in client.calls)
+    branches = [node for node in result.data.nodes if node.level == 2]
+    assert len(branches) == 40, "骨架不裁"
     expansion_calls = [call for call in client.calls if call[0] == "outline_branch_expansion"]
-    assert sum(
-        branch["preferredLeafCount"]
-        for call in expansion_calls
-        for branch in call[1]["branches"]
-    ) == 31
+    planned = sum(
+        branch["preferredLeafCount"] for call in expansion_calls for branch in call[1]["branches"]
+    )
+    assert len(leaves) == planned + 3 * 40, "多写的三级小节原样保留"
+    assert any("目录偏细" in warning for warning in result.data.warnings)
+    assert any("二级目录共40个" in warning for warning in result.data.warnings)
+    assert not any("裁剪" in warning for warning in result.data.warnings)
 
 
-def test_medium_outline_fills_a_model_omitted_branch_to_exact_quota() -> None:
+def test_a_branch_the_model_left_empty_is_shown_and_named_not_filled_with_templates() -> None:
+    """模型漏掉一个二级的三级小节：不再用「…建设内容」「…技术实现」之类的模板标题补齐。"""
     client = AdaptiveOutlineProvider(omit_last_branch_per_batch=True)
     request = OutlineRequest.model_validate({
-        "requestId": "outline-quota-shortfall-regression",
+        "requestId": "outline-empty-branch-shown",
         "title": "80页技术标",
         "targetPages": 80,
         "biddingMode": "BLIND",
@@ -646,9 +670,11 @@ def test_medium_outline_fills_a_model_omitted_branch_to_exact_quota() -> None:
     result = asyncio.run(TenderAiService(client).outline_result(request))
 
     leaves = [node for node in result.data.nodes if node.level == 3]
-    assert len(leaves) == 31
-    assert any("按二级任务语义补齐" in warning for warning in result.data.warnings)
-    assert all(node.task_brief.strip() for node in leaves)
+    assert leaves
+    assert not any(node.title.endswith(("建设内容", "技术实现", "实施与控制")) for node in leaves)
+    assert any("已从目录中略去" in warning for warning in result.data.warnings)
+    assert all(node.level != 2 or any(leaf.parent_key == node.node_key for leaf in leaves)
+               for node in result.data.nodes), "留在目录里的二级都有三级小节"
 
 
 def test_outline_adapts_leaf_target_to_a_smaller_valid_skeleton() -> None:
@@ -681,10 +707,12 @@ def test_outline_adapts_leaf_target_to_a_smaller_valid_skeleton() -> None:
 
     leaves = [node for node in result.data.nodes if node.level == 3]
     assert len(leaves) == 150
-    # 197 是 500 页的 target_leaf_max（每节 2.8 页）。这里曾经写着 200——
-    # 那是除数被改成 2.75 那一版的产物，而<b>同一份文件里另外六条断言</b>
-    # 都符合 2.6/2.8。一个只出现在诊断文案里的数字最容易被漏掉。
-    assert any("由197个调整为150个" in warning for warning in result.data.warnings)
+    # 500 页、评分项较多时按篇幅估算约 197 节（每节 2.8 页，含复杂度加成）。30 个二级最多
+    # 展开 150 节，偏差约 24%，超出 ±20% 容差：保留目录，并提示「偏粗」与每节页数。
+    # 计划随骨架调整本身不再单独提示（此前是「由 197 个调整为 150 个」）。
+    assert any("三级小节共150个" in warning and "偏粗" in warning
+               for warning in result.data.warnings)
+    assert not any("调整为" in warning for warning in result.data.warnings)
     expansion_calls = [
         call for call in client.calls if call[0] == "outline_branch_expansion"
     ]

@@ -17,12 +17,13 @@ from czghagent_ai.services.outline_strategy import (
     aggregate_outline_result,
     allocate_branch_targets,
     build_outline_scale,
-    expansion_density_errors,
+    expansion_structure_errors,
     merge_outline,
     merged_outline_errors,
-    normalize_expansion_quota,
     normalize_skeleton,
-    skeleton_density_errors,
+    outline_scale_warnings,
+    skeleton_scale_warnings,
+    skeleton_structure_errors,
 )
 from czghagent_ai.services.structured_output import AiStructuredExecutor, AiStructuredResult
 from czghagent_ai.strategy_models import BidStrategyResponse
@@ -97,8 +98,10 @@ class AdaptiveOutlinePlanner:
             object_name="技术标一二级目录骨架",
             schema_version="outline-skeleton-v2",
             normalizer=lambda response: normalize_skeleton(response, scale),
-            semantic_validator=lambda response: skeleton_density_errors(response, scale),
+            semantic_validator=skeleton_structure_errors,
         )
+        # 规模偏差只提示：模型的结构原样保留，由用户判断（直接用、编辑或重新生成）。
+        skeleton.data.warnings.extend(skeleton_scale_warnings(skeleton.data, scale))
         # 分批在**骨架阶段就定下来并发出去**，而不是留给调用方自己切。
         # 调用方各切各的，重跑一批时的分组就可能和上一次不同，
         # 于是「只重跑第 3 批」重跑的其实是另外一批分支。
@@ -134,8 +137,7 @@ class AdaptiveOutlinePlanner:
             OutlineExpansionResponse,
             object_name=f"技术标三级目录第{batch_index}批",
             schema_version="outline-expansion-v2",
-            normalizer=lambda response: normalize_expansion_quota(response, targets),
-            semantic_validator=lambda response: expansion_density_errors(
+            semantic_validator=lambda response: expansion_structure_errors(
                 response, targets
             ),
         )
@@ -157,13 +159,15 @@ class AdaptiveOutlinePlanner:
         skeleton_response = OutlineSkeletonResponse(
             nodes=skeleton.data.nodes, warnings=skeleton.data.warnings
         )
-        effective_scale = adapt_scale_to_skeleton(skeleton_response, scale)
         merged = merge_outline(
             skeleton_response, [result.data for result in expansions]
         )
-        errors = merged_outline_errors(merged, effective_scale)
+        errors = merged_outline_errors(merged)
         if errors:
             raise AiProviderOutputError("目录确定性合并失败：" + "；".join(errors))
+        # 与篇幅估算的偏差按<b>页数原始估算</b>比，而不是按随骨架调整后的计划比：
+        # 用户关心的是「100 页写成了几节」，不是模型有没有照着自己的骨架展开。
+        merged.warnings.extend(outline_scale_warnings(merged, scale, request.target_pages))
         result = aggregate_outline_result(merged, [skeleton, *expansions])
         self._balance_top_level_pages(result.data, request.target_pages)
         return result

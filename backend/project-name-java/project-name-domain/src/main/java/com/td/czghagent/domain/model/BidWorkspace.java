@@ -65,10 +65,19 @@ public record BidWorkspace(
         }
     }
 
+    /**
+     * 目录生成任务。
+     *
+     * @param warnings 目录生成的提示：规模与篇幅估算的偏差、略去的空章节。只提示，不代表失败——
+     *                 目录照常可用，由用户决定直接用、编辑还是重新生成。永不为 null。
+     */
     public record OutlineTask(
             String id, String status, String stage, int progress, long inputRevision,
             String workflowRunId, String errorMessage, LocalDateTime createdAt,
-            LocalDateTime startedAt, LocalDateTime finishedAt
+            LocalDateTime startedAt, LocalDateTime finishedAt, List<String> warnings
     ) {
+        public OutlineTask {
+            warnings = warnings == null ? List.of() : List.copyOf(warnings);
+        }
     }
 }

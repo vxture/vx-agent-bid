@@ -98,8 +98,13 @@ public interface BidRepository {
 
     boolean updateOutlineTaskProgress(String taskId, String stage, int progress);
 
+    /**
+     * 保存生成的目录并完成任务。
+     *
+     * @param warnings AI 服务给出的目录提示（规模偏差等），随任务保存供页面显示
+     */
     boolean completeOutlineTask(String taskId, String bidId,
-                                List<BidWorkspace.OutlineNode> nodes);
+                                List<BidWorkspace.OutlineNode> nodes, List<String> warnings);
 
     boolean failOutlineTask(String taskId, String bidId, String errorMessage);
 

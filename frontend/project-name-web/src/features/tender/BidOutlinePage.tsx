@@ -22,6 +22,7 @@ import { createClientId } from '@/utils/clientId'
 
 import { BidPageShell } from './components/BidPageShell'
 import { ErrorState, LoadingState } from './components/Feedback'
+import { OutlineWarnings } from './components/OutlineWarnings'
 import {
   useBidWorkspaceQuery,
   useGenerateContentMutation,
@@ -183,6 +184,7 @@ export default function BidOutlinePage() {
             }
           />
         ) : null}
+        <OutlineWarnings task={outlineTask} />
 
         <MetricGrid
           className="mt-lg"

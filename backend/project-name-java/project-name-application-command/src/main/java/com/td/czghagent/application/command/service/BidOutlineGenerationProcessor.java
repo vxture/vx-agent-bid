@@ -66,7 +66,8 @@ public class BidOutlineGenerationProcessor {
         if (!progress(taskId, "SAVING", 90)) {
             return;
         }
-        if (!bidRepository.completeOutlineTask(taskId, bidId, nodes)) {
+        // 提示随任务保存：目录规模偏差只提示、不让目录失败，页面据此显示黄色提示。
+        if (!bidRepository.completeOutlineTask(taskId, bidId, nodes, plan.warnings())) {
             return;
         }
         support.audit(context, bidId, "BID_OUTLINE_GENERATE",

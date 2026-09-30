@@ -274,7 +274,8 @@ class BidOutlineContextFactoryTest {
     }
 
     private static BidWorkspace.OutlineTask task(String id, long inputRevision) {
-        return new BidWorkspace.OutlineTask(id, "RUNNING", "SKELETON", 10, inputRevision, "run-1", null, NOW, NOW, null);
+        return new BidWorkspace.OutlineTask(id, "RUNNING", "SKELETON", 10, inputRevision, "run-1", null, NOW, NOW, null,
+                List.of());
     }
 
     private static BidRepository.AssetRecord asset(String id, String category, String fileName) {
