@@ -588,6 +588,9 @@ def _operation_prompt(operation: str) -> str:
             "信息最完整的一处，连续表格需保留必要的相邻片段。按信息重要性返回10至120个最有信息量的"
             "id，确有必要时可少于10个或增加到160个，但160是绝对上限；不得返回不存在的id，不得返回"
             "任何正文或解释。"
+            "若input.window存在，说明招标文件过长、已按原文顺序切成input.window.total段，"
+            "本次只给出其中第input.window.index段：只从本段片段中选择；本段若全是目录、程序、"
+            "资格、商务、评分或格式内容，返回空数组，不要为凑数硬选。"
         ),
         "project_overview_extraction": (
             "input.selectedSegments是从完整招标文件中筛选出的项目概述源证据。只返回sections数组，"

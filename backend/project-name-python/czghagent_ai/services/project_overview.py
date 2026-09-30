@@ -1,6 +1,7 @@
 # GENERATED_BY_AI
 # MODEL: gpt-5
 # DATE: 2026-08-11
+import asyncio
 import hashlib
 import re
 from collections.abc import Callable
@@ -9,6 +10,7 @@ from typing import Any
 from czghagent_ai.services.ai_provider import AiProviderDiagnostics
 from czghagent_ai.services.structured_output import (
     AiStructuredExecutor,
+    AiStructuredOutputError,
     AiStructuredResult,
 )
 from czghagent_ai.tender_models import (
@@ -16,12 +18,27 @@ from czghagent_ai.tender_models import (
     ProjectOverviewDraft,
     ProjectOverviewResponse,
     ProjectOverviewSourceSelection,
+    ProjectOverviewWindowSelection,
     SourceSegment,
 )
 
 _MAX_SELECTED_SOURCE_CHARACTERS = 48_000
 _MAX_SELECTED_SEGMENTS = 160
 _MAX_OVERVIEW_MARKDOWN_CHARACTERS = 6_400
+
+#: 选段一次最多送入多少字符的招标原文。
+#:
+#: 选段是唯一一个把<b>整份招标文件</b>送进模型的调用，输入随文件页数无上限增长：
+#: 2026-09-29 一份约 4 万字的文件就撞上了 Atlas 当时 100 KB 的请求体上限，
+#: 三四百页的文件会撞上模型上下文窗口本身（联络函 40）。按窗口切开后，
+#: 单次输入与文件长度脱钩。6 万字约合 3.5–4.5 万 token、约 180 KB：
+#: 常见的招标文件仍是一次调用，行为与切窗口前完全相同；各路由的最小窗口是 128K token，
+#: 留足了提示词、Schema 与输出的余量。
+_SELECTION_WINDOW_CHARACTERS = 60_000
+
+#: 同时在途的窗口数。窗口之间互不依赖，并行只缩短墙钟时间；上限防止一份超大文件
+#: 一次把十几个请求同时压到同一条路由上。
+_SELECTION_CONCURRENCY = 3
 
 
 class ProjectOverviewExtractor:
@@ -42,16 +59,25 @@ class ProjectOverviewExtractor:
             - Structured output failures identify the failing bounded object.
         """
         indexed = _index_segments(request.segments)
-        selection = await self._executor.execute_result(
-            "project_overview_source_selection",
-            _selection_payload(request, indexed),
-            f"{request.request_id}-overview-selection",
-            ProjectOverviewSourceSelection,
-            object_name="项目概述源片段选择",
-            schema_version="project-overview-source-selection-v1",
-            normalizer=_selection_normalizer(indexed),
-        )
-        selected = _selected_segments(indexed, selection.data.ordered_segment_ids)
+        windows = _selection_windows(indexed, _SELECTION_WINDOW_CHARACTERS)
+        if len(windows) == 1:
+            selection = await self._executor.execute_result(
+                "project_overview_source_selection",
+                _selection_payload(request, indexed),
+                f"{request.request_id}-overview-selection",
+                ProjectOverviewSourceSelection,
+                object_name="项目概述源片段选择",
+                schema_version="project-overview-source-selection-v1",
+                normalizer=_selection_normalizer(indexed),
+            )
+            selected_ids = selection.data.ordered_segment_ids
+            selection_diagnostics = selection.diagnostics
+            selection_attempts = selection.attempts
+        else:
+            selected_ids, selection_diagnostics, selection_attempts = (
+                await self._select_by_window(request, indexed, windows)
+            )
+        selected = _selected_segments(indexed, selected_ids)
         draft = await self._executor.execute_result(
             "project_overview_extraction",
             _composition_payload(request, selected),
@@ -64,20 +90,109 @@ class ProjectOverviewExtractor:
         response = ProjectOverviewResponse(project_overview=_render_markdown(draft.data))
         return AiStructuredResult(
             data=response,
-            diagnostics=_merge_diagnostics(selection.diagnostics, draft.diagnostics),
-            attempts=selection.attempts + draft.attempts,
+            diagnostics=_merge_diagnostics(selection_diagnostics, draft.diagnostics),
+            attempts=selection_attempts + draft.attempts,
         )
+
+    async def _select_by_window(
+        self,
+        request: InterpretationRequest,
+        indexed: list[tuple[str, SourceSegment]],
+        windows: list[list[tuple[str, SourceSegment]]],
+    ) -> tuple[list[str], AiProviderDiagnostics, int]:
+        """逐窗口选段，再按原文顺序合并、封顶。
+
+        每个窗口是一次独立的 ``project_overview_source_selection`` 调用，只看得见本窗口的片段，
+        ``input.window`` 告诉模型它读的是第几段。窗口的答案可以为空。合并后按原文位置排序，
+        再用与单窗口相同的均匀封顶收到 160 个——封顶在全文尺度上做，而不是每个窗口各取前几个，
+        否则片段多的窗口与片段少的窗口会被同等对待。
+
+        任一窗口失败即整体失败，不以「少一段也能写」降级：缺了哪一段，概述就缺哪一块项目内容，
+        且看不出来。全部窗口都答空，同样按「没有定位到项目内容」失败。
+        """
+        gate = asyncio.Semaphore(_SELECTION_CONCURRENCY)
+        total = len(windows)
+
+        async def select(
+            number: int, window: list[tuple[str, SourceSegment]]
+        ) -> AiStructuredResult[ProjectOverviewWindowSelection]:
+            async with gate:
+                return await self._executor.execute_result(
+                    "project_overview_source_selection",
+                    _selection_payload(
+                        request, window, window_index=number, window_total=total
+                    ),
+                    f"{request.request_id}-overview-selection-w{number}",
+                    ProjectOverviewWindowSelection,
+                    object_name=f"项目概述源片段选择（第{number}/{total}段）",
+                    schema_version="project-overview-source-selection-v1",
+                    normalizer=_selection_normalizer(window),
+                )
+
+        results = await asyncio.gather(
+            *(select(number, window) for number, window in enumerate(windows, 1))
+        )
+        positions = {segment_id: index for index, (segment_id, _) in enumerate(indexed)}
+        merged = sorted(
+            {
+                segment_id
+                for result in results
+                for segment_id in result.data.ordered_segment_ids
+            },
+            key=positions.__getitem__,
+        )
+        diagnostics = results[0].diagnostics
+        for result in results[1:]:
+            diagnostics = _merge_diagnostics(diagnostics, result.diagnostics)
+        attempts = sum(result.attempts for result in results)
+        if not merged:
+            raise AiStructuredOutputError(
+                "项目概述未在招标文件中定位到项目内容",
+                object_name="项目概述源片段选择",
+                schema_version="project-overview-source-selection-v1",
+                attempts=attempts,
+                validation_errors=[f"{total} 个窗口均未返回项目内容片段"],
+                finish_reason=diagnostics.finish_reason,
+                response_length=diagnostics.response_length,
+                response_hash=diagnostics.response_hash,
+            )
+        return _evenly_cap(merged, _MAX_SELECTED_SEGMENTS), diagnostics, attempts
 
 
 def _index_segments(segments: list[SourceSegment]) -> list[tuple[str, SourceSegment]]:
     return [(f"segment-{index:04d}", segment) for index, segment in enumerate(segments, 1)]
 
 
+def _selection_windows(
+    indexed: list[tuple[str, SourceSegment]], budget: int
+) -> list[list[tuple[str, SourceSegment]]]:
+    """按原文顺序把片段切成若干窗口，每个窗口的字符量不超过 ``budget``。
+
+    片段不跨窗口拆开：一个片段是解析器给出的最小定位单位，拆开后 id 与原文对不上。
+    单个片段本身超过预算时独占一个窗口。计量口径与 ``_limit_segments`` 相同
+    （正文 + 定位 + 每段 40 字符的 JSON 开销），而不是另起一套。
+    """
+    windows: list[list[tuple[str, SourceSegment]]] = [[]]
+    size = 0
+    for item in indexed:
+        segment = item[1]
+        segment_size = len(segment.text) + len(segment.locator) + 40
+        if windows[-1] and size + segment_size > budget:
+            windows.append([])
+            size = 0
+        windows[-1].append(item)
+        size += segment_size
+    return windows
+
+
 def _selection_payload(
     request: InterpretationRequest,
     indexed: list[tuple[str, SourceSegment]],
+    *,
+    window_index: int | None = None,
+    window_total: int | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "documentId": request.document_id,
         "title": request.title,
         "biddingMode": request.bidding_mode,
@@ -86,6 +201,9 @@ def _selection_payload(
             for segment_id, segment in indexed
         ],
     }
+    if window_index is not None and window_total is not None:
+        payload["window"] = {"index": window_index, "total": window_total}
+    return payload
 
 
 def _selection_normalizer(
