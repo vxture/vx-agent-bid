@@ -1025,7 +1025,7 @@ def normalize_outline_tree(raw: dict[str, Any]) -> None:
         return
     warnings = raw.setdefault("warnings", [])
     if isinstance(warnings, list):
-        warnings.append("AI outline tree and page budgets were normalized.")
+        warnings.append("目录层级与页数已按规则规整。")
 
 
 def _branch_blueprint_prompt(request: ChapterDraftRequest) -> dict[str, Any] | None:

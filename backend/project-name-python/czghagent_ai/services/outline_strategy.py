@@ -56,6 +56,16 @@ class OutlineScale:
         )
 
     @property
+    def level_two_cap(self) -> int:
+        """二级目录数的<b>唯一</b>上限：告诉模型的是它，提示用户的也是它。
+
+        含义是「再多，每个二级就分不到两个三级小节」（按篇幅估算的三级数 ÷ 每个二级至少 2 个）。
+        建议区间 ``target_level_two_min``–``target_level_two_max`` 与它之间是容差带，不提示。
+        此前告诉模型的是 ``max_level_two``，校验器卡的却是另一个更小的数，模型从不知道真正的上限。
+        """
+        return min(self.max_level_two, self.absolute_level_two_max)
+
+    @property
     def absolute_level_two_max(self) -> int:
         return max(
             self.target_level_two_max,
@@ -83,7 +93,7 @@ class OutlineScale:
                 "min": self.target_level_two_min,
                 "max": self.target_level_two_max,
             },
-            "maxLevelTwoChapters": self.max_level_two,
+            "maxLevelTwoChapters": self.level_two_cap,
             "maxLeafChapters": self.max_leaf,
             "generationMode": "PHASED_QUOTA",
         }
@@ -120,79 +130,14 @@ def normalize_skeleton_pages(value: dict[str, Any]) -> None:
             warnings.append(f"系统已归一化{normalized}个骨架章节的页数占位。")
 
 
-def normalize_skeleton_capacity(
-    value: dict[str, Any], scale: OutlineScale
-) -> None:
-    """Cap model-owned branches fairly without dropping any top-level business domain."""
-    nodes = value.get("nodes")
-    if not isinstance(nodes, list):
-        return
-    roots = [node for node in nodes if isinstance(node, dict) and node.get("level") == 1]
-    root_keys = [
-        node.get("nodeKey", node.get("node_key"))
-        for node in roots
-        if node.get("nodeKey", node.get("node_key"))
-    ]
-    branches_by_root: dict[str, list[dict[str, Any]]] = {
-        str(root_key): [] for root_key in root_keys
-    }
-    for node in nodes:
-        if not isinstance(node, dict) or node.get("level") != 2:
-            continue
-        parent_key = node.get("parentKey", node.get("parent_key"))
-        if parent_key in branches_by_root:
-            branches_by_root[str(parent_key)].append(node)
-    branches = [branch for items in branches_by_root.values() for branch in items]
-    capacity = max(
-        scale.target_level_two_max,
-        len(root_keys) * scale.min_level_two,
-    )
-    capacity = min(capacity, scale.absolute_level_two_max, scale.max_level_two)
-    if len(branches) <= capacity or any(
-        len(branches_by_root[str(root_key)]) < scale.min_level_two
-        for root_key in root_keys
-    ):
-        return
-    selected: list[dict[str, Any]] = []
-    queues: dict[str, list[dict[str, Any]]] = {}
-    for root_key in root_keys:
-        key = str(root_key)
-        items = branches_by_root[key]
-        selected.extend(items[:scale.min_level_two])
-        queues[key] = items[scale.min_level_two:]
-    if len(selected) > capacity:
-        return
-    while len(selected) < capacity:
-        progressed = False
-        for root_key in root_keys:
-            queue = queues[str(root_key)]
-            if not queue:
-                continue
-            selected.append(queue.pop(0))
-            progressed = True
-            if len(selected) == capacity:
-                break
-        if not progressed:
-            break
-    selected_ids = {id(node) for node in selected}
-    retained = [
-        node for node in nodes
-        if not isinstance(node, dict)
-        or node.get("level") != 2
-        or id(node) in selected_ids
-        or node.get("parentKey", node.get("parent_key")) not in branches_by_root
-    ]
-    trimmed = len(branches) - len(selected)
-    value["nodes"] = retained
-    if trimmed:
-        warnings = value.setdefault("warnings", [])
-        if isinstance(warnings, list):
-            warnings.append(f"模型超额返回的{trimmed}个二级目录已按系统容量公平裁剪。")
-
-
 def normalize_skeleton(value: dict[str, Any], scale: OutlineScale) -> None:
+    """只规整系统拥有的页数，不动模型给的结构。
+
+    这里曾经把「超额」的二级目录按容量公平裁掉：模型的结构被改了，用户却只看到结果。
+    现在数量偏差一律保留原样、作为提示展示给用户，由用户决定直接用、编辑还是重新生成。
+    """
+    del scale
     normalize_skeleton_pages(value)
-    normalize_skeleton_capacity(value, scale)
 
 
 def build_outline_scale(
@@ -223,53 +168,46 @@ def build_outline_scale(
                         max_level_two, hard_maximum)
 
 
-def outline_density_errors(
-    response: OutlineResponse, scale: OutlineScale
-) -> list[str]:
-    level_two = [node for node in response.nodes if node.level == 2]
-    leaves = [node for node in response.nodes if node.level == 3]
-    errors: list[str] = []
-    if len(level_two) > scale.max_level_two:
-        errors.append(
-            f"二级目录共{len(level_two)}个，超过上限{scale.max_level_two}个"
-        )
-    if len(leaves) < scale.target_leaf_min:
-        errors.append(
-            f"三级目录仅{len(leaves)}个，目标区间为"
-            f"{scale.target_leaf_min}至{scale.target_leaf_max}个；请按独立业务主题继续展开"
-        )
-    if len(leaves) > scale.max_leaf:
-        errors.append(
-            f"三级目录共{len(leaves)}个，超过全局安全上限{scale.max_leaf}个"
-        )
-    exactly_two = _parents_with_exactly_two_children(response.nodes, 2)
-    if level_two and exactly_two / len(level_two) >= 0.6 and len(leaves) < scale.target_leaf_ideal:
-        errors.append(
-            f"{exactly_two}/{len(level_two)}个二级目录恰好只有2个三级目录；"
-            "2个只是兜底下限，请优先展开为3至5个具体主题"
-        )
-    return errors
+#: 三级小节总数偏离按篇幅估算值多少以内不提示。二级目录数的容差带由建议区间与上限之间的
+#: 距离给出（见 ``OutlineScale.level_two_cap``），不另设比例。
+SCALE_TOLERANCE = 0.2
+
+_CHOICES = "可直接使用，也可在编辑中调整，或重新生成目录。"
 
 
-def skeleton_density_errors(
+def skeleton_structure_errors(response: OutlineSkeletonResponse) -> list[str]:
+    """骨架是否<b>能用</b>。只有用不了的情形才算错误、才让模型重来。"""
+    if not any(node.level == 1 for node in response.nodes):
+        return ["骨架没有任何一级目录"]
+    if not any(node.level == 2 for node in response.nodes):
+        return ["骨架没有任何二级目录，无法展开三级小节"]
+    return []
+
+
+def skeleton_scale_warnings(
     response: OutlineSkeletonResponse, scale: OutlineScale
 ) -> list[str]:
+    """骨架规模与篇幅估算的偏差。只提示，不拒绝、不裁剪、不让模型重来。"""
     branches = [node for node in response.nodes if node.level == 2]
-    roots = [node for node in response.nodes if node.level == 1]
-    maximum_branches = min(
-        scale.max_level_two,
-        scale.absolute_level_two_max,
-        max(scale.target_level_two_max, len(roots) * scale.min_level_two),
-    )
-    errors: list[str] = []
-    if len(branches) > maximum_branches:
-        errors.append(f"二级骨架共{len(branches)}个，超过上限{maximum_branches}个")
-    missing_briefs = sum(not node.task_brief.strip() for node in branches)
-    if branches and missing_briefs / len(branches) > 0.2:
-        errors.append(
-            f"{missing_briefs}个二级目录缺少任务简述，无法可靠展开具体三级主题"
+    warnings: list[str] = []
+    if len(branches) > scale.level_two_cap:
+        warnings.append(
+            f"二级目录共{len(branches)}个，多于按篇幅估算的上限{scale.level_two_cap}个"
+            f"（建议{scale.target_level_two_min}至{scale.target_level_two_max}个）：目录会偏细，"
+            f"每节篇幅偏短。{_CHOICES}"
         )
-    return errors
+    elif len(branches) < scale.target_level_two_min:
+        warnings.append(
+            f"二级目录仅{len(branches)}个，少于建议的{scale.target_level_two_min}至"
+            f"{scale.target_level_two_max}个：每章篇幅偏长，可能覆盖不到全部技术要点。{_CHOICES}"
+        )
+    missing_briefs = [node.title for node in branches if not node.task_brief.strip()]
+    if missing_briefs:
+        warnings.append(
+            f"{len(missing_briefs)}个二级目录缺少任务简述（如「{missing_briefs[0]}」），"
+            "其下三级小节可能不够具体。"
+        )
+    return warnings
 
 
 def adapt_scale_to_skeleton(
@@ -282,7 +220,7 @@ def adapt_scale_to_skeleton(
         - Each branch can carry between ``min_level_three`` and
           ``preferred_level_three_max`` leaves.
     Side Effects:
-        - Appends a diagnostic warning when the requested target is adjusted.
+        - None; the deviation from the page-based estimate is reported after merging.
     Error Semantics:
         - An empty skeleton is returned unchanged and remains invalid upstream.
     """
@@ -294,10 +232,8 @@ def adapt_scale_to_skeleton(
     target = min(max(scale.target_leaf_ideal, minimum_capacity), maximum_capacity)
     if target == scale.target_leaf_ideal:
         return scale
-    skeleton.warnings.append(
-        f"根据{branch_count}个有效二级目录的内容容量，三级目录计划已由"
-        f"{scale.target_leaf_ideal}个调整为{target}个，不使用空泛章节凑数。"
-    )
+    # 不另发提示：计划随骨架调整本身不是问题，与篇幅估算的偏差由合并后的
+    # outline_scale_warnings 用「多少节、每节多少页」一次说清。
     return replace(
         scale,
         target_leaf_min=min(scale.target_leaf_min, target),
@@ -344,98 +280,21 @@ def allocate_branch_targets(
     ]
 
 
-def normalize_expansion_quota(
-    value: dict[str, Any], targets: list[OutlineBranchTarget]
-) -> None:
-    """Reconcile model leaves to exact quotas without inventing project facts."""
-    nodes = value.get("nodes")
-    if not isinstance(nodes, list):
-        return
-    quotas = {target.node.node_key: target.leaf_count for target in targets}
-    counts = dict.fromkeys(quotas, 0)
-    retained: list[Any] = []
-    trimmed = 0
-    for node in nodes:
-        if not isinstance(node, dict):
-            retained.append(node)
-            continue
-        parent_key = node.get("parentKey", node.get("parent_key"))
-        if parent_key not in quotas:
-            retained.append(node)
-            continue
-        if counts[parent_key] >= quotas[parent_key]:
-            trimmed += 1
-            continue
-        counts[parent_key] += 1
-        retained.append(node)
-    value["nodes"] = retained
-    filled = 0
-    dimensions = (
-        ("建设内容", "建设范围、功能组成和配置要求"),
-        ("技术实现", "技术路线、实现方法和关键控制要点"),
-        ("实施与控制", "实施步骤、过程控制和协同机制"),
-        ("交付与验收", "交付成果、验收依据和验证方法"),
-        ("运行保障", "运行维护、风险处置和持续优化措施"),
-    )
-    existing_titles: dict[str, set[str]] = {
-        parent_key: set() for parent_key in quotas
-    }
-    for node in retained:
-        if not isinstance(node, dict):
-            continue
-        parent_key = node.get("parentKey", node.get("parent_key"))
-        title = node.get("title")
-        if parent_key in existing_titles and isinstance(title, str):
-            existing_titles[parent_key].add(title.strip())
-    for target in targets:
-        parent_key = target.node.node_key
-        while counts[parent_key] < quotas[parent_key]:
-            dimension, focus = dimensions[counts[parent_key] % len(dimensions)]
-            title = f"{target.node.title}{dimension}"
-            suffix = 2
-            while title in existing_titles[parent_key]:
-                title = f"{target.node.title}{dimension}{suffix}"
-                suffix += 1
-            retained.append({
-                "parentKey": parent_key,
-                "title": title,
-                "taskBrief": (
-                    f"围绕{target.node.title}，结合二级章节任务要求细化{focus}，"
-                    "不得补充项目输入中不存在的参数或承诺"
-                ),
-                "mustKeywords": target.node.must_keywords[:8],
-            })
-            existing_titles[parent_key].add(title)
-            counts[parent_key] += 1
-            filled += 1
-    if trimmed:
-        warnings = value.setdefault("warnings", [])
-        if isinstance(warnings, list):
-            warnings.append(f"模型超额返回的{trimmed}个三级目录已按系统配额裁剪。")
-    if filled:
-        warnings = value.setdefault("warnings", [])
-        if isinstance(warnings, list):
-            warnings.append(f"模型缺额的{filled}个三级目录已按二级任务语义补齐。")
-
-
-def expansion_density_errors(
+def expansion_structure_errors(
     response: OutlineExpansionResponse, targets: list[OutlineBranchTarget]
 ) -> list[str]:
-    expected = {target.node.node_key: target.leaf_count for target in targets}
-    actual = dict.fromkeys(expected, 0)
-    errors: list[str] = []
-    for node in response.nodes:
-        if node.parent_key not in expected:
-            errors.append(f"三级目录引用了本批次之外的父节点：{node.parent_key}")
-            continue
-        actual[node.parent_key] += 1
-    for parent_key, expected_count in expected.items():
-        if actual[parent_key] != expected_count:
-            errors.append(
-                f"父节点{parent_key}需要{expected_count}个三级目录，实际返回"
-                f"{actual[parent_key]}个"
-            )
-    return errors
+    """三级展开是否<b>能用</b>：只检查节点挂在本批的二级目录下。
+
+    每个二级的三级数量是建议（``preferredLeafCount``），多一两个少一两个都保留原样——
+    这里曾经要求逐个精确相等，不等就让模型重来，再不等就整份目录失败，
+    而之前的规整步骤还会裁掉多出的、用模板标题补齐缺的。
+    """
+    expected = {target.node.node_key for target in targets}
+    return [
+        f"三级目录引用了本批次之外的父节点：{node.parent_key}"
+        for node in response.nodes
+        if node.parent_key not in expected
+    ]
 
 
 def merge_outline(
@@ -458,9 +317,24 @@ def merge_outline(
             skeleton_children.setdefault(node.parent_key, []).append(node)
     output: list[OutlineNode] = []
     existing = {node.node_key for node in skeleton.nodes}
+    # 没有展开出三级小节的二级（以及因此没有子节点的一级）从目录里略去并点名。
+    # 目录的叶子必须是三级——正文按三级小节生成——所以空的二级留不下来；
+    # 而用「…建设内容」「…技术实现」这类模板标题替模型补齐，是在编造目录。
+    dropped: list[str] = []
     for root in (node for node in skeleton.nodes if node.level == 1):
+        branches = [
+            branch for branch in skeleton_children.get(root.node_key, [])
+            if expanded_by_parent.get(branch.node_key)
+        ]
+        dropped.extend(
+            branch.title for branch in skeleton_children.get(root.node_key, [])
+            if not expanded_by_parent.get(branch.node_key)
+        )
+        if not branches:
+            dropped.append(root.title)
+            continue
         output.append(_skeleton_to_outline(root))
-        for branch in skeleton_children.get(root.node_key, []):
+        for branch in branches:
             output.append(_skeleton_to_outline(branch))
             for index, leaf in enumerate(expanded_by_parent.get(branch.node_key, []), 1):
                 node_key = _unique_key(f"{branch.node_key}-leaf-{index}", existing)
@@ -478,7 +352,11 @@ def merge_outline(
                     # 只是每一章都召不回自己要响应的评分要求。
                     scoring_point_ids=leaf.scoring_point_ids,
                 ))
-    warnings.append("目录已按一二级骨架和系统分配的三级章节配额分批生成。")
+    if dropped:
+        warnings.append(
+            f"{len(dropped)}个章节没有生成下级小节，已从目录中略去（如「{dropped[0]}」）；"
+            "如需要，请在编辑中补回，或重新生成目录。"
+        )
     return OutlineResponse(
         nodes=output, coverage=_coverage_from_leaves(output), warnings=warnings
     )
@@ -510,17 +388,27 @@ def _coverage_from_leaves(nodes: list[OutlineNode]) -> list[CoverageItem]:
     ]
 
 
-def merged_outline_errors(
-    response: OutlineResponse, scale: OutlineScale
+def merged_outline_errors(response: OutlineResponse) -> list[str]:
+    """合并后的目录是否<b>能用</b>：至少要有可以写正文的三级小节。"""
+    if not any(node.level == 3 for node in response.nodes):
+        return ["目录没有任何三级小节，无法生成正文"]
+    return []
+
+
+def outline_scale_warnings(
+    response: OutlineResponse, scale: OutlineScale, target_pages: int
 ) -> list[str]:
+    """合并后目录与篇幅估算的偏差。只提示，不拒绝。"""
     leaves = [node for node in response.nodes if node.level == 3]
-    errors = outline_density_errors(response, scale)
-    if len(leaves) != scale.target_leaf_ideal:
-        errors.insert(
-            0,
-            f"确定性合并后三级目录应为{scale.target_leaf_ideal}个，实际为{len(leaves)}个",
+    warnings: list[str] = []
+    ideal = scale.target_leaf_ideal
+    if leaves and abs(len(leaves) - ideal) > ideal * SCALE_TOLERANCE:
+        direction = "偏细" if len(leaves) > ideal else "偏粗"
+        warnings.append(
+            f"三级小节共{len(leaves)}个，按{target_pages}页估算约{ideal}个："
+            f"目录{direction}，平均每节约{target_pages / len(leaves):.1f}页。{_CHOICES}"
         )
-    return errors
+    return warnings
 
 
 def aggregate_outline_result(
@@ -554,14 +442,6 @@ def _source_complexity(project_overview: str, technical_scoring: str) -> int:
     )
     overview_headings = len(re.findall(r"(?m)^\s{0,3}#{1,6}\s+", project_overview))
     return headings + scored_items + min(5, math.ceil(overview_headings / 2))
-
-
-def _parents_with_exactly_two_children(nodes: list[OutlineNode], level: int) -> int:
-    counts: dict[str, int] = {}
-    for node in nodes:
-        if node.parent_key:
-            counts[node.parent_key] = counts.get(node.parent_key, 0) + 1
-    return sum(counts.get(node.node_key, 0) == 2 for node in nodes if node.level == level)
 
 
 def _skeleton_roots_with_two_children(nodes: list[OutlineSkeletonNode]) -> int:
