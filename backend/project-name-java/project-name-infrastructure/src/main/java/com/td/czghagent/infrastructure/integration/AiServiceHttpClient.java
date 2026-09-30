@@ -369,15 +369,34 @@ public class AiServiceHttpClient implements DocumentParser, TenderAiGateway {
             case "AI_OUTPUT_INVALID" -> "AI 返回内容未通过结构校验";
             case "AI_MODEL_TIMEOUT" -> "AI 模型阶段执行超时";
             case "AI_GATEWAY_TIMEOUT" -> "AI 网关响应超时";
+            case "AI_INPUT_TOO_LARGE" -> "送给模型的内容超出上限，需要分段处理";
+            case "AI_OUTPUT_BUDGET_EXHAUSTED" -> "模型的输出预算在给出结果前已用完";
+            case "AI_ATLAS_NOT_ENTITLED" -> "本产品尚未被授权使用该模型路由";
             default -> "AI 工作流执行失败";
         };
     }
 
+    /**
+     * 读 Python 服务的失败封套。
+     *
+     * <p>现行形状是 X-1：顶层 {@code {code, message, retryable}}，诊断在 {@code details} 里。
+     * 这里曾经只读 FastAPI 旧的 {@code {"detail": {…}}}，而 Python 早已不再发那个形状——
+     * 两边都不报错，结果是每一次 AI 失败都落成 {@code AI_PROVIDER_ERROR}「AI 工作流执行失败」，
+     * 阶段、耗时、校验错误与被调方原码一概丢失（2026-09-29 请求体超限要读 Atlas 进程日志才定位）。
+     * 旧形状仍兼容读取，免得新旧版本交替发布的窗口里又丢一次。
+     */
     private AiError parseAiError(String response) {
         try {
-            JsonNode detail = OBJECT_MAPPER.readTree(response).path("detail");
-            String code = detail.path("code").asText("AI_PROVIDER_ERROR");
-            String message = detail.path("message").asText(aiErrorMessage(code));
+            JsonNode root = OBJECT_MAPPER.readTree(response);
+            JsonNode legacy = root.path("detail");
+            boolean current = root.path("code").isTextual();
+            JsonNode detail = current ? root.path("details") : legacy;
+            String code = (current ? root : legacy).path("code").asText("AI_PROVIDER_ERROR");
+            String message = (current ? root : legacy).path("message").asText(aiErrorMessage(code));
+            String atlasCode = detail.path("atlasCode").asText("");
+            if (!atlasCode.isBlank() && !message.contains(atlasCode)) {
+                message = message + "（" + atlasCode + "）";
+            }
             String objectName = detail.path("objectName").asText("");
             JsonNode validationErrors = detail.path("validationErrors");
             String validation = validationErrors.isArray() && !validationErrors.isEmpty()

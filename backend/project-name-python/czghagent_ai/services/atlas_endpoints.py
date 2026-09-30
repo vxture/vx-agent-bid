@@ -109,6 +109,20 @@ OPERATION_ROUTES: dict[str, OperationRoute] = {
 }
 
 
+def thinking_for(operation: str) -> str:
+    """这次调用开不开推理：走 ``chat/reasoning`` 的开，其余一律关。
+
+    Atlas v0.7.8 起推理开关按调用传（``thinking: "off" | "on"``），<b>不传就用上游默认，
+    而默认通常是开</b>。``chat/deterministic`` 与 ``chat/reasoning`` 的主模型是同一个
+    DeepSeek v4-pro——推理从来不是由路由区分的。不传的代价已经实测：2026-09-29 解读环节
+    平均每次输出 4137 token，其中 78% 是推理，p95 延迟 94 秒（Atlas #69）。
+
+    与路由同源而不另立一张表：路由本来就是按直连时代的 thinking 策略分出来的
+    （见模块说明），开推理的 operation 恰好就是走 ``chat/reasoning`` 的那三个。
+    """
+    return "on" if endpoint_for(operation) == REASONING_ENDPOINT_CODE else "off"
+
+
 def endpoint_for(operation: str) -> str:
     """这次调用该路由到哪个 endpoint。
 

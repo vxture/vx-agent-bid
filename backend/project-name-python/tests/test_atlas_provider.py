@@ -38,9 +38,12 @@ from czghagent_ai.services.atlas_endpoints import (
     OPERATION_ROUTES,
     REASONING_ENDPOINT_CODE,
     endpoint_for,
+    thinking_for,
 )
 from czghagent_ai.services.atlas_provider import (
+    AtlasInputTooLargeError,
     AtlasNotEntitledError,
+    AtlasOutputBudgetExhaustedError,
     AtlasProvider,
     AtlasTaskIdMissingError,
     AtlasTokenRejectedError,
@@ -519,14 +522,23 @@ def test_model_list_refusal_carries_atlas_code(caller: None) -> None:
         asyncio.run(provider.list_models())
 
 
+def _probe_answer(thinking: object = "off", reasoning: str | None = None) -> dict[str, Any]:
+    answer = _completion("pong", thinking=thinking)
+    if reasoning is not None:
+        answer["message"]["reasoning"] = reasoning
+    return answer
+
+
 def test_probe_is_one_capped_call_on_the_named_route(caller: None) -> None:
-    provider, seen = _provider(_answers(_completion("pong")))
+    provider, seen = _provider(_answers(_probe_answer()))
 
     result = asyncio.run(provider.probe(REASONING_ENDPOINT_CODE))
 
     body = json.loads(seen[0].content)
     assert body["endpointCode"] == REASONING_ENDPOINT_CODE
     assert body["maxTokens"] == 8, "探测要证明的是链路活着，补全上限压到最小"
+    assert body["thinking"] == "off", "8 个 token 在默认开推理的模型上会全部花在推理上"
+    assert body["temperature"] == 0
     assert body["taskId"] == "task-1"
     assert body["tenantId"] == TENANT_UUID
     assert body["featureId"] == "diagnostics.atlas_probe"
@@ -536,7 +548,26 @@ def test_probe_is_one_capped_call_on_the_named_route(caller: None) -> None:
         "modelCode": "deepseek-v4-flash",
         "latencyMs": 900,
         "totalTokens": 160,
+        "thinking": "off",
+        "reasoningReturned": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("echoed", "reasoning"),
+    [(None, None), ("on", None), ("off", "先想一想……")],
+    ids=["no-echo", "echo-on", "off-but-reasoned"],
+)
+def test_probe_fails_a_route_that_did_not_honour_thinking_off(
+    caller: None, echoed: object, reasoning: str | None
+) -> None:
+    """回显不是 off、或带 off 仍返回推理内容：解读类环节的推理成本还在，这条路由不算通过。"""
+    provider, _ = _provider(_answers(_probe_answer(echoed, reasoning)))
+
+    result = asyncio.run(provider.probe(DETERMINISTIC_ENDPOINT_CODE))
+
+    assert result["ok"] is False
+    assert result["code"] == "AI_THINKING_NOT_HONOURED"
 
 
 def test_probe_reports_a_refused_route_instead_of_raising(caller: None) -> None:
@@ -560,3 +591,88 @@ def test_probe_without_a_ticket_makes_no_call() -> None:
 
     assert result["ok"] is False
     assert seen == []
+
+
+# ── 生成参数（Atlas v0.7.8 起按调用传，#69） ─────────────────────────────
+
+
+@pytest.mark.parametrize("operation", sorted(OPERATION_ROUTES))
+def test_every_call_carries_the_generation_parameters_measured_in_the_direct_era(
+    caller: None, operation: str
+) -> None:
+    """不带 thinking 就是上游默认，而默认通常是开推理：解读环节因此 78% 的输出是推理。"""
+    provider, seen = _provider(_answers(_completion('{"value":"ok"}')))
+
+    _run(provider, operation)
+
+    body = json.loads(seen[0].content)
+    expected_thinking = "on" if endpoint_for(operation) == REASONING_ENDPOINT_CODE else "off"
+    assert body["thinking"] == expected_thinking
+    assert body["temperature"] == _operation_temperature(operation)
+
+
+def test_reasoning_is_on_exactly_for_the_three_operations_that_need_it() -> None:
+    on = {operation for operation in OPERATION_ROUTES if thinking_for(operation) == "on"}
+    assert on == {"bid_strategy_planning", "branch_blueprint_planning", "consistency_review"}
+
+
+def test_deterministic_extraction_runs_cold_and_without_reasoning(caller: None) -> None:
+    provider, seen = _provider(_answers(_completion('{"value":"ok"}')))
+
+    _run(provider, "project_overview_source_selection")
+
+    body = json.loads(seen[0].content)
+    assert (body["thinking"], body["temperature"], body["maxTokens"]) == ("off", 0, 4096)
+
+
+def test_atlas_enforces_a_deadline_shorter_than_our_own(caller: None) -> None:
+    """我们先放弃而 Atlas 还在生成，这一截是白付的钱：总时限交给 Atlas，并且比本地读超时短。"""
+    handler = _answers(_completion('{"value":"ok"}'))
+    seen: list[httpx.Request] = []
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    provider = AtlasProvider(
+        "http://atlas.internal", timeout_seconds=90, transport=httpx.MockTransport(_record)
+    )
+    _run(provider)
+
+    assert json.loads(seen[0].content)["timeoutMs"] == 88_000
+
+
+@pytest.mark.parametrize(
+    "code", ["PAYLOAD_TOO_LARGE", "CONTEXT_LENGTH_EXCEEDED", "UPSTREAM_REJECTED_REQUEST"]
+)
+def test_input_too_large_is_one_code_and_is_not_retried(caller: None, code: str) -> None:
+    provider, seen = _provider(_answers({"code": code, "message": "too big", "retryable": False}, 422))
+
+    with pytest.raises(AtlasInputTooLargeError) as caught:
+        _run(provider)
+
+    assert len(seen) == 1, "同一个请求重发多少次都一样大"
+    assert caught.value.details()["atlasCode"] == code
+
+
+def test_output_budget_spent_on_reasoning_is_named_and_not_retried(caller: None) -> None:
+    provider, seen = _provider(
+        _answers({"code": "OUTPUT_BUDGET_EXHAUSTED", "message": "all reasoning", "retryable": False}, 422)
+    )
+
+    with pytest.raises(AtlasOutputBudgetExhaustedError):
+        _run(provider)
+
+    assert len(seen) == 1
+
+
+def test_an_atlas_deadline_is_a_timeout_that_is_not_retried_locally(caller: None) -> None:
+    provider, seen = _provider(
+        _answers({"code": "DEADLINE_EXCEEDED", "message": "late", "retryable": False}, 504)
+    )
+
+    with pytest.raises(AiProviderError) as caught:
+        _run(provider)
+
+    assert caught.value.code == "AI_MODEL_TIMEOUT"
+    assert len(seen) == 1

@@ -177,6 +177,7 @@ class PlatformDiagnosticsServiceTest {
         assertThat(result.detail()).startsWith("1/2");
         assertThat(result.items()).extracting(PlatformDiagnostics.Probe::ok).containsExactly(true, false);
         assertThat(result.items().get(1).detail()).contains("chat/reasoning", "AI_ATLAS_NOT_ENTITLED");
+        assertThat(result.items().get(0).detail()).contains("推理已关闭");
     }
 
     @Test

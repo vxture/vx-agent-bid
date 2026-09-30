@@ -230,8 +230,8 @@ class AiServiceHttpClientTest {
     void carriesTheCalleeDiagnosticsIntoTheException() {
         responseStatus.set(502);
         responseBody.set("""
-                {"detail":{"code":"AI_OUTPUT_INVALID","message":"结构校验未通过",
-                 "objectName":"技术标目录","validationErrors":["nodes: too few items"],
+                {"code":"AI_OUTPUT_INVALID","message":"结构校验未通过","retryable":false,
+                 "details":{"objectName":"技术标目录","validationErrors":["nodes: too few items"],
                  "finishReason":"length","responseLength":1234,"responseHash":"abc",
                  "attempts":2,"inputTokens":100,"outputTokens":20,
                  "stage":"outline_skeleton_planning","elapsedMillis":8000}}
@@ -264,6 +264,52 @@ class AiServiceHttpClientTest {
         assertThatThrownBy(this::callOutline).isInstanceOfSatisfying(
                 AiGatewayException.class, failure ->
                         assertThat(failure.getErrorCode()).isEqualTo("AI_PROVIDER_ERROR"));
+    }
+
+    /** 旧的 {"detail": …} 形状仍读得懂：新旧版本交替发布的窗口里不能再丢一次诊断。 */
+    @Test
+    void stillReadsTheLegacyDetailEnvelope() {
+        responseStatus.set(502);
+        responseBody.set("""
+                {"detail":{"code":"AI_OUTPUT_INVALID","message":"结构校验未通过",
+                 "objectName":"技术标目录","validationErrors":["nodes: too few items"],
+                 "finishReason":"length","responseLength":1234,"responseHash":"abc",
+                 "attempts":2,"inputTokens":100,"outputTokens":20,
+                 "stage":"outline_skeleton_planning","elapsedMillis":8000}}
+                """);
+
+        assertThatThrownBy(this::callOutline).isInstanceOfSatisfying(
+                AiGatewayException.class, failure -> {
+                    assertThat(failure.getFinishReason()).isEqualTo("length");
+                    assertThat(failure.getResponseLength()).isEqualTo(1234);
+                    assertThat(failure.getAttempts()).isEqualTo(2);
+                    assertThat(failure.getStage()).isEqualTo("outline_skeleton_planning");
+                    assertThat(failure.getElapsedMillis()).isEqualTo(8000L);
+                    assertThat(failure.getMessage())
+                            .as("对象名和第一条校验错误进用户消息，否则「未通过校验」等于没说")
+                            .contains("技术标目录").contains("too few items");
+                });
+    }
+
+    /**
+     * 被调方（Atlas）的原码要进到异常消息里：这是界面与 bid_ai_run_attempt 上唯一能说明
+     * 「为什么失败」的东西。此前 Java 读错了封套形状，每一次失败都只剩「AI 工作流执行失败」。
+     */
+    @Test
+    void surfacesTheCallersOwnCodeAndTheAtlasCode() {
+        responseStatus.set(502);
+        responseBody.set("""
+                {"code":"AI_INPUT_TOO_LARGE","message":"输入超出上限（CONTEXT_LENGTH_EXCEEDED）：too big",
+                 "retryable":false,"details":{"stage":"project_overview_source_selection",
+                 "atlasCode":"CONTEXT_LENGTH_EXCEEDED","attempts":1,"elapsedMillis":40}}
+                """);
+
+        assertThatThrownBy(this::callOutline).isInstanceOfSatisfying(
+                AiGatewayException.class, failure -> {
+                    assertThat(failure.getErrorCode()).isEqualTo("AI_INPUT_TOO_LARGE");
+                    assertThat(failure.getMessage()).contains("CONTEXT_LENGTH_EXCEEDED");
+                    assertThat(failure.getStage()).isEqualTo("project_overview_source_selection");
+                });
     }
 
     /**
@@ -337,7 +383,7 @@ class AiServiceHttpClientTest {
     }
 
     private static String errorBody(String code, String message) {
-        return "{\"detail\":{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}}";
+        return "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"retryable\":false}";
     }
 
     /** 记下铸了几次、作废了哪几张。 */

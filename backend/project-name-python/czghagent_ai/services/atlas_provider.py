@@ -37,10 +37,12 @@ from czghagent_ai.services.ai_provider import (
     AiProviderTimeoutError,
     _decode_json_object,
     _elapsed_millis,
+    _operation_max_tokens,
     _operation_prompt,
+    _operation_temperature,
     _text_hash,
 )
-from czghagent_ai.services.atlas_endpoints import endpoint_for
+from czghagent_ai.services.atlas_endpoints import endpoint_for, thinking_for
 from czghagent_ai.task_context import current_atlas_identity, current_task_id
 
 ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
@@ -98,7 +100,37 @@ _RETRYABLE_CODES: dict[str, bool] = {
     "INVALID_TENANT_ID": False,
     "INVALID_APPLICATION_ID": False,
     "CANDIDATE_POOL_TOO_LARGE": False,
+    # Atlas v0.7.6–v0.7.10（#69）新增。全部不可重试：同一个请求重发多少次都一样大、
+    # 一样超时、一样把输出预算花在推理上。
+    "PAYLOAD_TOO_LARGE": False,
+    "REQUEST_BODY_MALFORMED": False,
+    "CONTEXT_LENGTH_EXCEEDED": False,
+    "UPSTREAM_REJECTED_REQUEST": False,
+    "OUTPUT_BUDGET_EXHAUSTED": False,
+    "THINKING_MODE_UNSUPPORTED": False,
+    "CHAT_THINKING_INVALID": False,
+    "CHAT_TIMEOUT_INVALID": False,
+    "DEADLINE_EXCEEDED": False,
 }
+
+#: 「输入太大，需要分片」的三种说法（Atlas #69）。上游识别出来的超窗口是
+#: CONTEXT_LENGTH_EXCEEDED，识别不出的是 UPSTREAM_REJECTED_REQUEST，网关入口的是
+#: PAYLOAD_TOO_LARGE——对产品而言处置相同，所以收成一个码。
+_INPUT_TOO_LARGE_CODES = frozenset(
+    {"PAYLOAD_TOO_LARGE", "CONTEXT_LENGTH_EXCEEDED", "UPSTREAM_REJECTED_REQUEST"}
+)
+
+
+class AtlasInputTooLargeError(AiProviderError):
+    """输入超出了网关请求体上限或所路由模型的上下文窗口。不可重试，要分片。"""
+
+    code = "AI_INPUT_TOO_LARGE"
+
+
+class AtlasOutputBudgetExhaustedError(AiProviderError):
+    """输出预算在产出正文之前就被推理用完了。不可重试：同样的预算会同样用完。"""
+
+    code = "AI_OUTPUT_BUDGET_EXHAUSTED"
 
 #: Atlas 自己的上游首字节超时是 30 秒，且主模型超时后可能再试 endpoint 的备选，
 #: 所以一次调用合法地超过 60 秒。这个上限是留给 Atlas 把话说完的——
@@ -119,6 +151,13 @@ class AtlasProvider:
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = httpx.Timeout(timeout_seconds, connect=30.0)
+        # 交给 Atlas 的整次调用总时限，比我们自己的读超时短一点。
+        #
+        # 不带它时，我们等到读超时就断开并重试，而 Atlas 还在让上游继续生成、继续计费
+        # ——2026-09-29 chat/deterministic 的 p95 是 94 秒，本地读超时是 90 秒，
+        # 恰好有一截调用付了两遍钱。带上它，超时由 Atlas 执行：取消上游、停止计费，
+        # 答 504 DEADLINE_EXCEEDED（不可重试）。留 2 秒给响应走回来。
+        self._deadline_ms = max(1_000, min(600_000, int(timeout_seconds * 1000) - 2_000))
         self._max_retries = max(0, min(max_retries, 3))
         # 传输层做成可注入的依赖缝：测试要看到<b>真实发出去的字节</b>——
         # 请求体的字段名、tenantId 是不是 UUID、票有没有挂在 Authorization 上——
@@ -232,6 +271,7 @@ class AtlasProvider:
             # 所以在这里生成而不是交给服务端。
             "requestId": str(uuid.uuid4()),
             **_attribution(operation, task_id),
+            **self._generation(operation, payload),
         }
         if tenant_id:
             # tenantId 取自票里的 claim，<b>不是</b>产品码。送产品码看起来能跑：
@@ -241,6 +281,24 @@ class AtlasProvider:
             # 真正的原因被盖住。非 UUID 还会让 Atlas 的请求日志里写进 NULL，
             # 本产品的流量就从每一张租户汇总表里消失，且全程没有任何报错。
             body["tenantId"] = tenant_id
+        return body
+
+    def _generation(self, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """生成参数：推理开关、温度、输出上限、总时限。
+
+        Atlas v0.7.8 起这些都按调用传（#69）。此前本仓认定「生成参数属于路由配置、
+        请求体不带」，而 Atlas 并不给路由设默认温度，推理开关也不按路由区分——于是
+        解读环节以上游默认（开推理、默认温度）跑了一整段时间。取值沿用直连时代逐条实测的
+        策略表（详细设计 §8.1），与直连 provider 读同一份，不另抄一遍。
+        """
+        body: dict[str, Any] = {
+            "thinking": thinking_for(operation),
+            "temperature": _operation_temperature(operation),
+            "timeoutMs": self._deadline_ms,
+        }
+        max_tokens = _operation_max_tokens(operation, payload)
+        if max_tokens is not None:
+            body["maxTokens"] = max_tokens
         return body
 
     def _decode_response(
@@ -334,6 +392,12 @@ class AtlasProvider:
             "endpointCode": endpoint_code,
             "messages": [{"role": "user", "content": "ping"}],
             "maxTokens": 8,
+            # 关推理是这个探测成立的前提：DeepSeek 默认开推理，8 个 token 会全部花在
+            # 推理上，主模型一个字都没答——那时看到的「通过」是备选模型替它答的
+            # （Atlas #69 走查，2026-09-29）。温度 0 让结果可复现。
+            "thinking": "off",
+            "temperature": 0,
+            "timeoutMs": self._deadline_ms,
             "taskId": task_id,
             "requestId": str(uuid.uuid4()),
             **_attribution("diagnostics.atlas_probe", task_id),
@@ -364,13 +428,33 @@ class AtlasProvider:
                 "message": str(error),
             }
         payload = response.json() if response.content else {}
-        usage = payload.get("usage") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            payload = {}
+        usage = payload.get("usage")
+        message = payload.get("message")
+        reasoning = message.get("reasoning") if isinstance(message, dict) else None
+        thinking = payload.get("thinking")
+        # Atlas 承诺「不会悄悄忽略请求的模式」；这里把它的回显和实际有没有推理内容
+        # 一并核对。回显不是 off、或带 off 仍返回推理内容，都算这条路由没通过——
+        # 那意味着解读类环节的推理成本还在。
+        honoured = thinking == "off" and not reasoning
         return {
             "endpointCode": endpoint_code,
-            "ok": True,
-            "modelCode": payload.get("modelCode") if isinstance(payload, dict) else None,
-            "latencyMs": payload.get("latencyMs") if isinstance(payload, dict) else None,
+            "ok": honoured,
+            "modelCode": payload.get("modelCode"),
+            "latencyMs": payload.get("latencyMs"),
             "totalTokens": usage.get("totalTokens") if isinstance(usage, dict) else None,
+            "thinking": thinking,
+            "reasoningReturned": bool(reasoning),
+            **(
+                {}
+                if honoured
+                else {
+                    "code": "AI_THINKING_NOT_HONOURED",
+                    "message": f"请求 thinking=off，Atlas 回显 {thinking!r}"
+                    + ("，且返回了推理内容" if reasoning else ""),
+                }
+            ),
         }
 
 
@@ -475,7 +559,25 @@ def _atlas_error(
         return AiProviderAuthenticationError(
             message, stage=operation, attempts=attempts, elapsed_millis=elapsed
         )
-    if response.status_code in {408, 504} or code == "UPSTREAM_TIMEOUT":
+    if code in _INPUT_TOO_LARGE_CODES:
+        error: AiProviderError = AtlasInputTooLargeError(
+            f"输入超出上限（{code}）：{message}",
+            stage=operation,
+            attempts=attempts,
+            elapsed_millis=elapsed,
+        )
+        error.atlas_code = code  # type: ignore[attr-defined]
+        return error
+    if code == "OUTPUT_BUDGET_EXHAUSTED":
+        error = AtlasOutputBudgetExhaustedError(
+            f"输出预算被推理用完（{code}）：{message}",
+            stage=operation,
+            attempts=attempts,
+            elapsed_millis=elapsed,
+        )
+        error.atlas_code = code  # type: ignore[attr-defined]
+        return error
+    if response.status_code in {408, 504} or code in {"UPSTREAM_TIMEOUT", "DEADLINE_EXCEEDED"}:
         return AiProviderTimeoutError(
             message, stage=operation, attempts=attempts, elapsed_millis=elapsed
         )

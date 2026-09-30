@@ -69,7 +69,11 @@ async def service_error(_: Request, exception: ServiceError) -> JSONResponse:
     return JSONResponse(
         status_code=exception.status,
         content=envelope(
-            exception.code, exception.message, exception.retryable, exception.field
+            exception.code,
+            exception.message,
+            exception.retryable,
+            exception.field,
+            exception.details,
         ),
     )
 

@@ -58,14 +58,25 @@ class ServiceError(Exception):
 
 
 def envelope(
-    code: str, message: str, retryable: bool, field: str | None = None
+    code: str,
+    message: str,
+    retryable: bool,
+    field: str | None = None,
+    details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造封套。
 
     ``field`` 为空时整体省略而不是置 ``None``——一个恒为 null 的键会让调用方
     以为它有时候有值，然后写一条永远不进的分支。
+
+    ``details`` 是 X-1 四个字段之外的诊断：失败阶段、耗时、尝试次数、finish_reason、
+    token 与结构校验错误。Java 侧把它们落进 ``bid_ai_run_attempt``。它曾经只挂在异常对象上
+    而从不序列化，Java 读的又是 FastAPI 旧的 ``{"detail": …}``——两头都不报错，
+    结果是每一次 AI 失败都只剩一句「AI 工作流执行失败」，定位全靠读对方进程日志。
     """
     body: dict[str, Any] = {"code": code, "message": message, "retryable": retryable}
     if field is not None:
         body["field"] = field
+    if details:
+        body["details"] = details
     return body
