@@ -402,6 +402,10 @@ jobs:
           set -euo pipefail
           pnpm config set "//npm.pkg.github.com/:_authToken" "$NODE_AUTH_TOKEN"
           pnpm install --frozen-lockfile
+          # ESLint 与 ruff 同一个理由进 CI：它一直配着却没人跑，于是在前端悄悄积了 11 条
+          # （import 顺序与一个同时导出组件和 hook 的文件）。放在测试前、同一步里，
+          # 复用已装好的依赖，不另起一个要装第二遍 node_modules 的作业。
+          pnpm exec eslint . --no-cache
           # 参数接在脚本末尾的 vitest run 上；报告格式见 vitest.config.ts（text-summary + json-summary）。
           pnpm test --coverage
 

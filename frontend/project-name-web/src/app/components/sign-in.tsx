@@ -5,11 +5,11 @@ import { useLocation } from 'react-router'
 
 import { Button, Stack } from '@vxture/design-ui'
 
-import { loginHref } from '../auth/return-to'
-import { useMessages } from '../lib/i18n/provider'
-
 import { GateFrame } from './gate-frame'
 import { GateHeading } from './gate-heading'
+
+import { loginHref } from '../auth/return-to'
+import { useMessages } from '../lib/i18n/use-messages'
 
 // 产品的前门（参照 vx-agent-yucer app/(app)/components/sign-in.tsx，照搬）。
 //

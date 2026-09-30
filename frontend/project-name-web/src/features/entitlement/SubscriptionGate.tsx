@@ -8,7 +8,7 @@ import { ShellBootScreen } from '@vxture/design-system'
 
 import { entitlementApi } from '@/api/modules/entitlement'
 import { NoSubscription } from '@/app/components/no-subscription'
-import { useMessages } from '@/app/lib/i18n/provider'
+import { useMessages } from '@/app/lib/i18n/use-messages'
 import { useAuthStore } from '@/stores/auth'
 import { platformAvatarSrc } from '@/utils/avatar'
 

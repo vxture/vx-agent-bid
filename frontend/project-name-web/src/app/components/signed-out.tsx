@@ -5,12 +5,12 @@ import { useEffect } from 'react'
 
 import { Stack } from '@vxture/design-ui'
 
-import { clearSignedOutMarker } from '../auth/signed-out-marker'
-import { useMessages } from '../lib/i18n/provider'
-
 import { GateActions, GatePrimary, GateSecondary } from './gate-actions'
 import { GateFrame } from './gate-frame'
 import { GateHeading } from './gate-heading'
+
+import { clearSignedOutMarker } from '../auth/signed-out-marker'
+import { useMessages } from '../lib/i18n/use-messages'
 
 // 退出登录之后（参照 vx-agent-yucer app/(app)/components/signed-out.tsx，照搬）。
 //

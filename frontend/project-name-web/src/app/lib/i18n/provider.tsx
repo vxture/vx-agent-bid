@@ -1,12 +1,13 @@
 // GENERATED_BY_AI
 // MODEL: claude-opus-5
 // DATE: 2026-09-15
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { Locale } from '@vxture/shared'
 
-import { getDictionary, type Dictionary } from './dictionary'
+import { getDictionary } from './dictionary'
 import { resolveLocale } from './locale'
+import { MessagesContext } from './use-messages'
 import { writeLocale } from './write-locale'
 
 // 词典，给组件用（参照 vx-agent-yucer app/(app)/lib/i18n/provider.tsx）。
@@ -14,14 +15,6 @@ import { writeLocale } from './write-locale'
 // 与 yucer 的差别：yucer 切换语言后让服务端重新渲染（router.refresh），本产品没有服务端渲染，
 // 所以语言放在这里的状态里，切换即重渲染，同时写 cookie 并更新 <html lang>——
 // 否则英文页面对读屏软件和浏览器翻译都自称中文。
-
-interface MessagesValue {
-  readonly t: Dictionary
-  readonly locale: Locale
-  readonly setLocale: (next: Locale) => void
-}
-
-const MessagesContext = createContext<MessagesValue | null>(null)
 
 export function MessagesProvider({
   initialLocale,
@@ -44,28 +37,4 @@ export function MessagesProvider({
 
   const value = useMemo(() => ({ t: getDictionary(locale), locale, setLocale }), [locale, setLocale])
   return <MessagesContext.Provider value={value}>{children}</MessagesContext.Provider>
-}
-
-/**
- * 当前词典。在 Provider 外调用直接抛错而不是退回中文：静默退回会让漏挂的 Provider 一直藏着，
- * 直到有人切到英文、发现某一块顽固地停在中文——那是最难报告这个问题的读者。
- */
-export function useMessages(): Dictionary {
-  return useMessagesValue().t
-}
-
-export function useLocale(): Locale {
-  return useMessagesValue().locale
-}
-
-export function useSetLocale(): (next: Locale) => void {
-  return useMessagesValue().setLocale
-}
-
-function useMessagesValue(): MessagesValue {
-  const value = useContext(MessagesContext)
-  if (!value) {
-    throw new Error('useMessages must be called inside <MessagesProvider>')
-  }
-  return value
 }

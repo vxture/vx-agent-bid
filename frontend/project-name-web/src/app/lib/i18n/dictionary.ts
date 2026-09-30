@@ -3,8 +3,8 @@
 // DATE: 2026-09-15
 import { DEFAULT_LOCALE, type Locale } from '@vxture/shared'
 
-import { en } from '../messages.en'
 import * as zh from '../messages'
+import { en } from '../messages.en'
 
 // 词典：一个形状，每种语言一份（参照 vx-agent-yucer app/(app)/lib/i18n/dictionary.ts）。
 //
