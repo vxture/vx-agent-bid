@@ -354,6 +354,26 @@ class AiServiceHttpClientTest {
         }
     }
 
+    /** Python 透传的实际应答模型要能读进 Java 的诊断——运行记录据此覆盖配置里的模型名。 */
+    @Test
+    void readsTheModelThatActuallyAnsweredFromTheDiagnostics() {
+        responseBody.set("""
+                {"data":{"nodes":[],"coverage":[],
+                 "dictionary":{"metrics":[],"terms":[],"fixedFacts":[]},"warnings":[]},
+                 "diagnostics":{"finishReason":"stop","responseLength":10,"responseHash":"h",
+                 "inputTokens":100,"outputTokens":20,"reasoningTokens":5,
+                 "cachedInputTokens":30,"attempts":1,"modelCode":"doubao-seed-2-0-pro-260215"}}
+                """);
+
+        TenderAiGateway.AiDiagnostics diagnostics = PlatformCallerContext.run(
+                new TenantScope("org-1", "ws-1"), null,
+                () -> client.planOutline(outlineRequest()).diagnostics());
+
+        assertThat(diagnostics.modelCode()).isEqualTo("doubao-seed-2-0-pro-260215");
+        assertThat(diagnostics.reasoningTokens()).isEqualTo(5L);
+        assertThat(diagnostics.cachedInputTokens()).isEqualTo(30L);
+    }
+
     private TenderAiGateway.OutlinePlan callOutline() {
         return PlatformCallerContext.run(
                 new TenantScope("org-1", "ws-1"), null,

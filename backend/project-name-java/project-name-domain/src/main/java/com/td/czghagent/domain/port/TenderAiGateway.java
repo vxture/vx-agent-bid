@@ -38,6 +38,11 @@ public interface TenderAiGateway {
 
     AiResponse<Review> review(ReviewRequest request);
 
+    /**
+     * 一次模型调用的诊断。
+     *
+     * @param modelCode 实际应答的模型（Atlas 回显，故障转移后是兜底模型）；直连或未回显时为 null
+     */
     record AiDiagnostics(
             String finishReason,
             Integer responseLength,
@@ -46,8 +51,16 @@ public interface TenderAiGateway {
             Long outputTokens,
             Long reasoningTokens,
             Long cachedInputTokens,
-            Integer attempts
+            Integer attempts,
+            String modelCode
     ) {
+        public AiDiagnostics(String finishReason, Integer responseLength, String responseHash,
+                             Long inputTokens, Long outputTokens, Long reasoningTokens,
+                             Long cachedInputTokens, Integer attempts) {
+            this(finishReason, responseLength, responseHash, inputTokens, outputTokens,
+                    reasoningTokens, cachedInputTokens, attempts, null);
+        }
+
         public static AiDiagnostics empty() {
             return new AiDiagnostics(null, null, null, null, null, null, null, 1);
         }

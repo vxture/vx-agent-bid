@@ -37,6 +37,7 @@ const check = (): PlatformCheck => ({
   c3Up: probe({ configured: false, ok: false, detail: 'PLATFORM_API_URL 未配置' }),
   c3Down: probe(),
   atlas: probe({ detail: '本产品可见 7 个模型' }),
+  atlasContract: probe({ detail: '线上契约指纹 c1-5f484ea774f6 与本产品核对过的一致' }),
   atlasRoutes: probe({ detail: 'chat/fast 窗口 256000 / 输出 128000，推理模式 ["off","on"]' }),
   usageReplay: probe({ ok: false, detail: '只读探测不跑这一项' }),
 })

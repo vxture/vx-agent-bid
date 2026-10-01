@@ -256,6 +256,7 @@ def ai_envelope(
             reasoning_tokens=diagnostics.reasoning_tokens,
             cached_input_tokens=diagnostics.cached_input_tokens,
             attempts=result.attempts,
+            model_code=diagnostics.model_code,
         ),
     )
 
@@ -512,6 +513,15 @@ async def list_atlas_models() -> dict[str, object]:
     except AiProviderError as exception:
         raise map_ai_error(exception) from exception
     return {"count": len(codes), "models": codes}
+
+
+@router.get("/atlas/contract", dependencies=[Depends(require_internal_token)])
+async def atlas_contract() -> dict[str, object]:
+    """带票读 Atlas 契约指纹，与本产品钉住的值比对。不计量。"""
+    try:
+        return await _atlas_exit().contract()
+    except AiProviderError as exception:
+        raise map_ai_error(exception) from exception
 
 
 @router.get("/atlas/routes", dependencies=[Depends(require_internal_token)])

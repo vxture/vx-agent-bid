@@ -121,9 +121,12 @@ class JdbcGenerationUnitPersistence {
                      Long outputTokens, Long reasoningTokens, Long cachedInputTokens,
                      String outputHash, String responseFields,
                      String finishReason, Integer responseLength, String responseHash,
-                     Integer attempts) {
+                     Integer attempts, String modelCode) {
+        // model_name 在开始时按配置写入；完成时换成实际应答的模型（Atlas 回显，故障转移后是
+        // 兜底模型）。没有回显时保留原值——配置名总比空着强，但它不是事实。
         jdbcTemplate.update("""
                 UPDATE bid_ai_run SET status = 'SUCCEEDED', duration_ms = ?, input_tokens = ?,
+                    model_name = COALESCE(LEFT(?, 100), model_name),
                     output_tokens = ?, reasoning_tokens = ?, cached_input_tokens = ?,
                     output_hash = ?, response_fields = ?, finish_reason = ?,
                     response_length = ?, response_hash = ?,
@@ -131,9 +134,9 @@ class JdbcGenerationUnitPersistence {
                     finished_at = CURRENT_TIMESTAMP,
                     error_code = NULL, error_message = NULL
                     WHERE id = ? AND current_attempt_id = ? AND status = 'RUNNING'
-                """, durationMillis, inputTokens, outputTokens, reasoningTokens, cachedInputTokens,
-                outputHash, responseFields, finishReason, responseLength, responseHash,
-                attempts, aiRunId, attemptId);
+                """, durationMillis, inputTokens, modelCode, outputTokens, reasoningTokens,
+                cachedInputTokens, outputHash, responseFields, finishReason, responseLength,
+                responseHash, attempts, aiRunId, attemptId);
         completeAttempt(attemptId, durationMillis, inputTokens, outputTokens,
                 reasoningTokens, cachedInputTokens, finishReason, responseLength, responseHash, attempts);
     }

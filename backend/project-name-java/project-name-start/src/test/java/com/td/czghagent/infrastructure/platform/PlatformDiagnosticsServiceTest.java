@@ -66,7 +66,7 @@ class PlatformDiagnosticsServiceTest {
     void setUp() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         for (String path : List.of("/platform/entitlements", "/internal/atlas/models", "/internal/atlas/routes",
-                "/internal/atlas/probe")) {
+                "/internal/atlas/contract", "/internal/atlas/probe")) {
             server.createContext(path, exchange -> {
                 seen.add(exchange.getRequestHeaders());
                 exchange.getRequestBody().readAllBytes();

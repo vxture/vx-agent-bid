@@ -171,7 +171,7 @@ public class BidAiExecutionService {
                     diagnostics.cachedInputTokens(), fingerprint.hash(output, promptVersion),
                     responseFields(output), diagnostics.finishReason(),
                     diagnostics.responseLength(), diagnostics.responseHash(),
-                    diagnostics.attempts());
+                    diagnostics.attempts(), diagnostics.modelCode());
             return output;
         } catch (RuntimeException exception) {
             AiGatewayException gatewayFailure = gatewayFailure(exception);

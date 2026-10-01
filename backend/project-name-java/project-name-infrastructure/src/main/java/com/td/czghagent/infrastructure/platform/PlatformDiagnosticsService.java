@@ -133,7 +133,7 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
     public PlatformCheck check() {
         return new PlatformCheck(
                 LocalDateTime.now(clock).toString(),
-                c1(), tokenMint(), c2(), c3Up(), c3Down(), atlasModels(), atlasRoutes(),
+                c1(), tokenMint(), c2(), c3Up(), c3Down(), atlasModels(), atlasRoutes(), atlasContract(),
                 new Probe(!platformApiUrl.isBlank() && !usageConsumeClient.isMock(), false,
                         "只读探测不跑这一项：点「运行重放校验」会把同一个幂等键上报两次，"
                                 + "期望第二次答 replayed:true 且带回第一次的 event_id；"
@@ -337,6 +337,32 @@ public class PlatformDiagnosticsService implements PlatformDiagnostics {
                     + "；请求体上限 " + body.path("maxRequestBytes").asText("未知") + " 字节");
         } catch (RuntimeException exception) {
             return failed("Atlas 路由容量", exception);
+        }
+    }
+
+    /**
+     * 契约指纹：Atlas 的必填规则与错误码词表是否还是本产品核对过的那一版。
+     *
+     * <p>指纹只在契约变化时才动，所以这一项是 Atlas 发版后唯一需要例行看的东西。
+     * 不一致不代表调用已经坏了，代表要对着新契约逐条核对客户端，核对完再改钉住的值。
+     */
+    private Probe atlasContract() {
+        if (atlasApiUrl.isBlank()) {
+            return Probe.notConfigured("ATLAS_API_URL");
+        }
+        try {
+            S2SToken token = atlasCredentials.mintOrExplain();
+            JsonNode body = TaskContext.run(taskId("diag-contract"), () -> aiService.atlasContract(token));
+            boolean matches = body.path("matches").asBoolean(false);
+            String live = body.path("fingerprint").asText("未知");
+            String pinned = body.path("pinned").asText("?");
+            return new Probe(true, matches, matches
+                    ? "线上契约指纹 " + live + " 与本产品核对过的一致；错误码 "
+                            + body.path("errorCodeCount").asText("?") + " 条"
+                    : "线上契约指纹 " + live + " ≠ 本产品核对过的 " + pinned
+                            + "：Atlas 改了必填规则或错误码，需要对照新契约逐条核对后再更新");
+        } catch (RuntimeException exception) {
+            return failed("Atlas 契约", exception);
         }
     }
 

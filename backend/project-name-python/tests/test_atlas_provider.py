@@ -822,3 +822,72 @@ def test_an_unparseable_upstream_frame_does_not_discard_a_good_answer(caller: No
     ))
 
     assert _run(provider).data == {"value": "ok"}
+
+
+# ── 对齐 Atlas v0.7.18：用量子集、实际模型、限流等待、契约指纹 ──────────────
+
+
+def test_reasoning_and_cached_tokens_and_the_answering_model_are_recorded(caller: None) -> None:
+    """Atlas 口径：reasoningTokens ⊂ completionTokens，cachedInputTokens ⊂ promptTokens。"""
+    answer = _completion('{"value":"ok"}', modelCode="doubao-seed-2-0-lite-260428")
+    answer["usage"].update({"reasoningTokens": 12, "cachedInputTokens": 30})
+    provider, _ = _provider(_answers(answer))
+
+    diagnostics = _run(provider).diagnostics
+
+    assert (diagnostics.reasoning_tokens, diagnostics.cached_input_tokens) == (12, 30)
+    assert diagnostics.model_code == "doubao-seed-2-0-lite-260428"
+
+
+def test_a_subset_atlas_did_not_report_stays_unknown_not_zero(caller: None) -> None:
+    provider, _ = _provider(_answers(_completion('{"value":"ok"}')))
+
+    diagnostics = _run(provider).diagnostics
+
+    assert diagnostics.reasoning_tokens is None
+    assert diagnostics.cached_input_tokens is None
+
+
+def test_the_streamed_done_frame_reports_the_model_that_actually_answered(caller: None) -> None:
+    provider, _ = _provider(_sse(
+        {"type": "text", "delta": '{"value":"ok"}'},
+        {"type": "done", "finishReason": "stop", "modelCode": "deepseek-v4-flash",
+         "usage": {"promptTokens": 3, "completionTokens": 2, "totalTokens": 5}},
+    ))
+
+    assert _run(provider).diagnostics.model_code == "deepseek-v4-flash"
+
+
+def test_rate_limiting_waits_as_long_as_atlas_asks(caller: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    waits: list[float] = []
+
+    async def record_sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr("czghagent_ai.services.atlas_provider.asyncio.sleep", record_sleep)
+    responses = iter([
+        httpx.Response(429, json={"code": "RATE_LIMITED", "message": "slow down",
+                                  "retryable": True, "retryAfterMs": 4500}),
+        httpx.Response(200, json=_completion('{"value":"ok"}')),
+    ])
+    provider, _ = _provider(lambda request: next(responses))
+
+    _run(provider)
+
+    assert waits == [4.5]
+
+
+def test_the_contract_fingerprint_is_compared_with_the_one_this_client_was_checked_against(
+    caller: None,
+) -> None:
+    from czghagent_ai.services.atlas_provider import ATLAS_CONTRACT_FINGERPRINT
+
+    same, _ = _provider(_answers({"fingerprint": ATLAS_CONTRACT_FINGERPRINT, "errorCodes": [{}] * 52}))
+    moved, seen = _provider(_answers({"fingerprint": "c1-000000000000", "errorCodes": []}))
+
+    assert asyncio.run(same.contract())["matches"] is True
+    result = asyncio.run(moved.contract())
+    assert result["matches"] is False
+    assert result["pinned"] == ATLAS_CONTRACT_FINGERPRINT
+    assert seen[0].url.path == "/.well-known/vxture-contract"
+    assert seen[0].headers["authorization"] == "Bearer minted.jwt.value"
