@@ -244,11 +244,30 @@ class BidGenerationServiceTest {
         assertThat(commit.value().assembledChapterContent()).isEqualTo("<p>组装后的总体设计</p>");
         assertThat(commit.value().chapterSummary()).isEqualTo("章节摘要");
         assertThat(commit.value().provider()).isEqualTo("deepseek");
+        assertThat(commit.value().modelName()).isEqualTo("deepseek-chat");
         assertThat(commit.value().inputTokens()).isEqualTo(1000L);
         assertThat(commit.value().outputTokens()).isEqualTo(400L);
         assertThat(commit.value().finishReason()).isEqualTo("stop");
         assertThat(commit.value().responseHash()).isEqualTo("resp-hash");
         verify(aiExecutionService, never()).revise(anyString(), anyString(), anyString(), anyString(), any());
+    }
+
+    /**
+     * 记下的是<strong>实际应答的</strong>模型：Atlas 按路由挂载、故障转移后还可能换成兜底模型，
+     * 配置名只是开始时的猜测。v0.1.27 只改了单次调用的完成路径，正文分段走的是这条提交，
+     * 生产上所有正文运行仍记着配置名（2026-10-02）。
+     */
+    @Test
+    void theCommitCarriesTheModelAtlasReportsNotTheConfiguredOne() {
+        claimable("u1", 800);
+        TenderAiGateway.AiResponse<TenderAiGateway.ChapterDraft> echoed = response(CLEAN_HTML);
+        when(gateway.draftChapter(draftRequest)).thenReturn(new TenderAiGateway.AiResponse<>(echoed.data(),
+                new TenderAiGateway.AiDiagnostics("stop", 120, "resp-hash", 1000L, 400L, 50L, 10L, 1,
+                        "doubao-seed-2-0-lite-260428")));
+
+        service.generateUnit(TASK, BID, OWNER, "snap-1", SNAPSHOT_HASH, "u1");
+
+        assertThat(committed().value().modelName()).isEqualTo("doubao-seed-2-0-lite-260428");
     }
 
     /**

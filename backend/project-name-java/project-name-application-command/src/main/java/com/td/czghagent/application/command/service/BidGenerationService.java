@@ -189,7 +189,10 @@ public class BidGenerationService {
                     unit.id(), unit.taskId(), unit.bidId(), unit.chapterId(), unit.unitIndex(), unit.unitTitle(),
                     run.id(), run.attemptId(), visibleCharacters, budgetVarianceRatio, budgetStatus,
                     unitHtml, contentHash(unit, unitHtml), draft.summary(), assembled,
-                    assembledHash, summary, providerName, modelName, snapshot.promptVersion(),
+                    // 实际应答的模型（Atlas 回显；按路由挂载、故障转移后是兜底模型）。开始时写入的
+                    // 配置名只是猜测；没有回显时才退回它。
+                    assembledHash, summary, providerName, safe(diagnostics.modelCode(), modelName),
+                    snapshot.promptVersion(),
                     elapsedMillis(started), diagnostics.inputTokens(), diagnostics.outputTokens(),
                     diagnostics.reasoningTokens(), diagnostics.cachedInputTokens(),
                     contentHash(unit, unitHtml), diagnostics.finishReason(),
