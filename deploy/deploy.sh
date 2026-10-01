@@ -156,8 +156,11 @@ pull_one() {
   fi
   local fallback="${fb_reg}/${fb_ns}/${image}:${tag}"
   log "主源失败，改用备源 ${fallback}"
-  docker pull "$fallback"
-  docker tag "$fallback" "$primary"
+  # 显式 return，不靠 set -e：重试时 pull_one 在 `( … ) || rc=1` 里跑，bash 在 || 左边
+  # 关闭 errexit——靠 set -e 的话，备源也拉不到时它会接着 tag 并返回 0，
+  # 一个真的拉不到的镜像会被当成拉到了。
+  docker pull "$fallback" || return 1
+  docker tag "$fallback" "$primary" || return 1
 }
 
 # 把本次部署的镜像引用钉进 docker-compose.override.yml（compose 自动合并它）。
@@ -212,7 +215,7 @@ cmd_start() {
   # （ai 约 1.5GB，web 约 50MB），串行等于让最小的那个排在最大的后面干等。
   # 各自的输出收进独立文件再顺序打印——并行的日志交织在一起，出问题时分不清
   # 哪一行属于哪个镜像。
-  local pids=() logs=() rc=0 i=0
+  local pids=() logs=() failed=() rc=0 i=0
   for image in "${IMAGES[@]}"; do
     logs[i]="$(mktemp)"
     pull_one "$image" "$tag" > "${logs[i]}" 2>&1 &
@@ -221,12 +224,24 @@ cmd_start() {
   done
   i=0
   for image in "${IMAGES[@]}"; do
-    wait "${pids[i]}" || rc=1
+    wait "${pids[i]}" || failed+=("$image")
     cat "${logs[i]}"
     rm -f "${logs[i]}"
     i=$((i + 1))
   done
-  [ "$rc" -eq 0 ] || { log "FATAL: 有镜像拉取失败，见上面各自的日志"; exit 1; }
+  # 并行失败的**逐个**再拉一次。本机是 Docker 29 + containerd 镜像存储：几个镜像共享层时
+  # 同时拉，会撞上 containerd 的
+  #   failed commit on ref "layer-sha256:…": rename …/ingest/…/data …: no such file or directory
+  # ——同一层的 ingest 文件被另一个拉取先挪走了（2026-09-30 v0.1.23、2026-10-01 v0.1.27
+  # 两次，都在 ACR 认证抖动、三个镜像一起转去备源时出现）。它是并发竞争，串行重拉即可；
+  # 一切顺利时仍然并行，快的那条不变。子 shell：pull_one 缺备源配置时会 exit。
+  if [ "${#failed[@]}" -gt 0 ]; then
+    log "并行拉取有 ${#failed[@]} 个失败（${failed[*]}），逐个重试一次"
+    for image in "${failed[@]}"; do
+      ( pull_one "$image" "$tag" ) || rc=1
+    done
+  fi
+  [ "$rc" -eq 0 ] || { log "FATAL: 有镜像拉取失败（并行与逐个重试都未成功），见上面各自的日志"; exit 1; }
 
   # 拉取全部成功才钉，且赶在 up 之前——理由见 write_image_pins。
   write_image_pins
