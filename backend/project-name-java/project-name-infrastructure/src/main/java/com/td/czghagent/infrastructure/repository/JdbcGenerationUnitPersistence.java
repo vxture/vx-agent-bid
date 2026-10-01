@@ -194,6 +194,7 @@ class JdbcGenerationUnitPersistence {
         }
         jdbcTemplate.update("""
                 UPDATE bid_ai_run SET status = 'SUCCEEDED', duration_ms = ?, input_tokens = ?,
+                    model_name = COALESCE(LEFT(?, 100), model_name),
                     output_tokens = ?, reasoning_tokens = ?, cached_input_tokens = ?,
                     output_hash = ?, finish_reason = ?, response_length = ?,
                     response_hash = ?, response_fields = ?,
@@ -201,7 +202,7 @@ class JdbcGenerationUnitPersistence {
                     finished_at = CURRENT_TIMESTAMP,
                     error_code = NULL, error_message = NULL
                     WHERE id = ? AND current_attempt_id = ? AND status = 'RUNNING'
-                """, commit.durationMillis(), commit.inputTokens(), commit.outputTokens(),
+                """, commit.durationMillis(), commit.inputTokens(), commit.modelName(), commit.outputTokens(),
                 commit.reasoningTokens(), commit.cachedInputTokens(),
                 commit.outputHash(), commit.finishReason(), commit.responseLength(),
                 commit.responseHash(), commit.responseFields(), commit.attempts(),
