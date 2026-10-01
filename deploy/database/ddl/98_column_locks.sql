@@ -55,7 +55,7 @@ GRANT UPDATE (completed_units, error_message, finished_at, heartbeat_at,
 REVOKE UPDATE ON bid.bid_generation_snapshot FROM tenderforge_svc;
 -- bid_generation_snapshot: 代码里没有任何 UPDATE —— 追加型，不给 UPDATE。
 REVOKE UPDATE ON bid.bid_ai_run FROM tenderforge_svc;
-GRANT UPDATE (attempt_count, cached_input_tokens, current_attempt_id, duration_ms, error_code, error_message, failure_reason, finish_reason, finished_at, input_tokens, model_attempt_count, object_name, output_hash, output_tokens, reasoning_tokens, response_fields, response_hash, response_length, schema_version, status)
+GRANT UPDATE (attempt_count, cached_input_tokens, current_attempt_id, duration_ms, error_code, error_message, failure_reason, finish_reason, finished_at, input_tokens, model_attempt_count, model_name, object_name, output_hash, output_tokens, reasoning_tokens, response_fields, response_hash, response_length, schema_version, status)
   ON bid.bid_ai_run TO tenderforge_svc;
 REVOKE UPDATE ON bid.bid_ai_run_attempt FROM tenderforge_svc;
 GRANT UPDATE (cached_input_tokens, duration_ms, error_code, error_message, failure_reason, finish_reason, finished_at, input_tokens, model_attempt_count, output_tokens, reasoning_tokens, response_hash, response_length, status)

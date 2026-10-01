@@ -128,6 +128,9 @@ class AiProviderDiagnostics:
     reasoning_tokens: int | None = None
     cached_input_tokens: int | None = None
     attempts: int = 1
+    #: 实际应答的模型。按 endpointCode 路由时由 Atlas 回显，故障转移后是兜底模型；
+    #: 直连时为空，由 Java 侧沿用配置里的模型名。
+    model_code: str | None = None
 
 
 @dataclass(frozen=True)

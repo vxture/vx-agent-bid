@@ -54,6 +54,7 @@ public interface PlatformDiagnostics {
             Probe c3Down,
             Probe atlas,
             Probe atlasRoutes,
+            Probe atlasContract,
             Probe usageReplay
     ) {
     }

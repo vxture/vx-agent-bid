@@ -62,7 +62,7 @@ public interface BidProductionRepository {
                        Long outputTokens, Long reasoningTokens, Long cachedInputTokens,
                        String outputHash, String responseFields,
                        String finishReason, Integer responseLength, String responseHash,
-                       Integer attempts);
+                       Integer attempts, String modelCode);
 
     void failAiRun(String aiRunId, String aiRunAttemptId,
                    long durationMillis, Long inputTokens, Long outputTokens,

@@ -165,6 +165,11 @@ public class AiServiceHttpClient implements DocumentParser, TenderAiGateway {
         return atlasDiagnostic(client.get().uri("/internal/atlas/models"), token, "/internal/atlas/models");
     }
 
+    /** 系统验证：带票读 Atlas 契约指纹，与本产品钉住的值比对（不计量）。 */
+    public JsonNode atlasContract(S2SToken token) {
+        return atlasDiagnostic(client.get().uri("/internal/atlas/contract"), token, "/internal/atlas/contract");
+    }
+
     /** 系统验证：带票读 Atlas 路由容量，核对本产品实际路由（不计量）。 */
     public JsonNode atlasRoutes(S2SToken token) {
         return atlasDiagnostic(client.get().uri("/internal/atlas/routes"), token, "/internal/atlas/routes");

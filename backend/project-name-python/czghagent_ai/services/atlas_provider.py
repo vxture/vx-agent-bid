@@ -119,6 +119,13 @@ _RETRYABLE_CODES: dict[str, bool] = {
     "DEADLINE_EXCEEDED": False,
 }
 
+#: 本产品按其核对过的 Atlas 契约指纹（v0.7.18，2026-10-01）。
+#:
+#: 指纹只在必填规则或错误码词表变化时才动。系统验证每次都拉一次线上值来比：不一致就是
+#: Atlas 改了契约，要对着新的 ``requests`` / ``errorCodes`` 逐条核对本客户端，再改这里。
+#: 不靠对方记得通知——Atlas 侧自己也说过漏报过一次指纹移动。
+ATLAS_CONTRACT_FINGERPRINT = "c1-5f484ea774f6"
+
 #: 「输入太大，需要分片」的三种说法（Atlas #69）。上游识别出来的超窗口是
 #: CONTEXT_LENGTH_EXCEEDED，识别不出的是 UPSTREAM_REJECTED_REQUEST，网关入口的是
 #: PAYLOAD_TOO_LARGE——对产品而言处置相同，所以收成一个码。
@@ -253,7 +260,7 @@ class AtlasProvider:
 
             error = _atlas_error(response, operation, attempt + 1, started)
             if _should_retry(error, response) and attempt < self._max_retries:
-                await asyncio.sleep(2**attempt)
+                await asyncio.sleep(_retry_delay_seconds(response, attempt))
                 continue
             raise error
 
@@ -392,6 +399,40 @@ class AtlasProvider:
         if response.status_code >= 400:
             raise _atlas_error(response, "atlas_models", 1, started)
         return _model_codes(response.json())
+
+    async def contract(self) -> dict[str, Any]:
+        """带票读 ``GET /.well-known/vxture-contract``，与钉住的指纹比对。不计量。
+
+        指纹是 Atlas 契约（必填规则与错误码词表）的纯函数：它变了，说明 Atlas 改了
+        必填项或错误码，要逐条核对后再改钉住的值。这是 Atlas 发版后调用方唯一需要例行做的事。
+        """
+        self.validate_configuration()
+        token, _ = current_atlas_identity()
+        if not token:
+            raise AiProviderNotConfiguredError(
+                "本次请求没有携带 Atlas S2S 票；票由 Java 侧现铸并转呈", stage="atlas_contract"
+            )
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                response = await client.get(
+                    f"{self._base_url}/.well-known/vxture-contract",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                )
+        except httpx.HTTPError as exception:
+            raise AiProviderError(
+                "Atlas 不可达", stage="atlas_contract", elapsed_millis=_elapsed_millis(started)
+            ) from exception
+        if response.status_code >= 400:
+            raise _atlas_error(response, "atlas_contract", 1, started)
+        body = response.json()
+        fingerprint = body.get("fingerprint") if isinstance(body, dict) else None
+        return {
+            "fingerprint": fingerprint,
+            "pinned": ATLAS_CONTRACT_FINGERPRINT,
+            "matches": fingerprint == ATLAS_CONTRACT_FINGERPRINT,
+            "errorCodeCount": len(body.get("errorCodes") or []) if isinstance(body, dict) else 0,
+        }
 
     async def route_capacity(self) -> dict[str, Any]:
         """带票读 ``GET /v1/model-routes``，并逐条核对本产品实际使用的路由。不计量。
@@ -654,27 +695,42 @@ async def _collect_stream(response: httpx.Response) -> httpx.Response:
         "finishReason": done.get("finishReason"),
         "usage": done.get("usage") or {},
         "thinking": done.get("thinking"),
+        # done 帧报的是实际应答的模型，故障转移后是兜底模型（Atlas v0.4.0 起）。
+        "modelCode": done.get("modelCode"),
     })
 
 
 def _atlas_diagnostics(
     body: dict[str, Any], content: str, finish_reason: str | None, attempts: int
 ) -> AiProviderDiagnostics:
+    """把 Atlas 回报的用量与实际模型原样带回（Atlas 口径，v0.7.13 起各厂商一致）。
+
+    ``promptTokens`` 是全部输入，``cachedInputTokens`` 是其中读缓存的部分；
+    ``reasoningTokens`` 是 ``completionTokens`` 的子集。子集字段缺席 = 上游没报，记空而不是 0。
+    上游没报用量时 Atlas 返回的是三个 0 而内部记 NULL——把这些 0 当成真实用量累加会让消耗
+    被低估且看起来一切正常，所以总量为 0 时一概按「没报」处理。
+    """
     usage = body.get("usage")
     if not isinstance(usage, dict):
         usage = {}
     total = usage.get("totalTokens")
-    # 上游没报用量时 Atlas 返回的是三个 0，而它自己内部记的是 NULL。
-    # 把这些 0 当成真实用量累加会让消耗被低估，且看起来一切正常——
-    # 「这次调用没花 token」和「这次调用花了多少没人知道」是两件事。
     reported = isinstance(total, int) and total > 0
+
+    def count(key: str) -> int | None:
+        value = usage.get(key)
+        return value if reported and isinstance(value, int) and value >= 0 else None
+
+    model_code = body.get("modelCode")
     return AiProviderDiagnostics(
         finish_reason=finish_reason,
         response_length=len(content),
         response_hash=_text_hash(content),
-        input_tokens=usage.get("promptTokens") if reported else None,
-        output_tokens=usage.get("completionTokens") if reported else None,
+        input_tokens=count("promptTokens"),
+        output_tokens=count("completionTokens"),
+        reasoning_tokens=count("reasoningTokens"),
+        cached_input_tokens=count("cachedInputTokens"),
         attempts=attempts,
+        model_code=model_code if isinstance(model_code, str) and model_code else None,
     )
 
 
@@ -743,6 +799,22 @@ def _atlas_error(
     )
     error.atlas_code = code  # type: ignore[attr-defined]
     return error
+
+
+def _retry_delay_seconds(response: httpx.Response, attempt: int) -> float:
+    """限流时照 Atlas 给的 ``retryAfterMs`` 等（v0.7.11 起才真的带上），其余按指数退避。
+
+    上限 30 秒：等待发生在一次模型调用的预算里，等得更久就该交给 Temporal 的重试。
+    只有技术限流带这个值，所以先判空。
+    """
+    try:
+        envelope = response.json()
+    except ValueError:
+        envelope = {}
+    wait = envelope.get("retryAfterMs") if isinstance(envelope, dict) else None
+    if isinstance(wait, int | float) and wait > 0:
+        return min(float(wait) / 1000, 30.0)
+    return float(2**attempt)
 
 
 def _should_retry(error: AiProviderError, response: httpx.Response) -> bool:

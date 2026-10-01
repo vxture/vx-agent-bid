@@ -20,6 +20,7 @@ class AiResponseDiagnostics(ApiModel):
     reasoning_tokens: int | None = Field(default=None, ge=0)
     cached_input_tokens: int | None = Field(default=None, ge=0)
     attempts: int = Field(ge=1)
+    model_code: str | None = None
 
 
 class AiResponseEnvelope(ApiModel, Generic[AiData]):

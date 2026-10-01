@@ -758,6 +758,18 @@ Atlas 授权查询按 UUID 转型。所以取 task_id 的 UUIDv5：同一任务�
 按不完整处理**（可重试一次），绝不把半截答案当完整答案。被调方若按 JSON 一次性回答也照常解码。
 系统验证的探测仍为非流式（答案只有几个 token）。
 
+**对齐 Atlas v0.7.18（2026-10-01）**：
+- **契约指纹**：本产品按 Atlas 契约 `c1-5f484ea774f6` 核对过（`atlas_provider.ATLAS_CONTRACT_FINGERPRINT`）。
+  系统验证每次带票读 `GET /.well-known/vxture-contract` 比对；不一致说明 Atlas 改了必填规则或错误码，
+  对照新契约逐条核对客户端后再改钉住的值。这是 Atlas 发版后唯一需要例行看的东西，不靠对方通知。
+- **用量按 Atlas 口径记**：`promptTokens` 为全部输入，`cachedInputTokens`（读缓存）是其子集；
+  `reasoningTokens` 是 `completionTokens` 的子集。两个子集写进 `bid_ai_run(_attempt)` 的
+  `cached_input_tokens` / `reasoning_tokens`；子集字段缺席 = 上游没报，记空而不是 0。
+- **记实际应答的模型**：Atlas 在响应（流式在 `done` 帧）回显 `modelCode`，故障转移后是兜底模型。
+  `bid_ai_run.model_name` 开始时按配置写入，完成时用回显覆盖（`98_column_locks` 授予 `model_name` 更新）；
+  没有回显时保留配置名。
+- **限流等待**：`RATE_LIMITED` 带 `retryAfterMs` 时照它等（上限 30 秒），其余按指数退避。
+
 **Atlas 的拒绝码**（全部不可重试）：`PAYLOAD_TOO_LARGE` / `CONTEXT_LENGTH_EXCEEDED` /
 `UPSTREAM_REJECTED_REQUEST` 收成 `AI_INPUT_TOO_LARGE`（输入太大，需要分片）；
 `OUTPUT_BUDGET_EXHAUSTED` 为 `AI_OUTPUT_BUDGET_EXHAUSTED`（输出预算在给出结果前被推理用完）；

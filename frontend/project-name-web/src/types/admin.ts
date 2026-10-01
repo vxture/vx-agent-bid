@@ -67,6 +67,8 @@ export interface PlatformCheck {
   atlas: PlatformProbe
   /** 本产品实际路由的容量与推理模式核对（`GET /v1/model-routes`）。 */
   atlasRoutes: PlatformProbe
+  /** Atlas 契约指纹与本产品核对过的是否一致。 */
+  atlasContract: PlatformProbe
   usageReplay: PlatformProbe
 }
 

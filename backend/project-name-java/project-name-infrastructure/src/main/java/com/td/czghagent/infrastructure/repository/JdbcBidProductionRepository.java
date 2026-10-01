@@ -115,10 +115,11 @@ public class JdbcBidProductionRepository implements BidProductionRepository {
                               Long outputTokens, Long reasoningTokens, Long cachedInputTokens,
                               String outputHash, String responseFields,
                               String finishReason, Integer responseLength, String responseHash,
-                              Integer attempts) {
+                              Integer attempts, String modelCode) {
         units.completeRun(aiRunId, aiRunAttemptId, durationMillis, inputTokens, outputTokens,
                 reasoningTokens, cachedInputTokens,
-                outputHash, responseFields, finishReason, responseLength, responseHash, attempts);
+                outputHash, responseFields, finishReason, responseLength, responseHash, attempts,
+                modelCode);
     }
 
     @Override
